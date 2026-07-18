@@ -11,6 +11,9 @@ A **Tor toggle button in the KDE Plasma network applet** — next to the
   Tor Browser's built-in bridges or your own.
 - **No password prompts**: start/stop goes through systemd D-Bus, authorized by
   a scoped polkit rule (only `tor.service`, only start/stop/restart).
+- **Panel icon badge**: while Tor is connected, the Wi-Fi tray icon gets a
+  small bridge badge (it replaces the VPN padlock variant — Tor wins), so you
+  can see at a glance that Tor is up.
 - The button only appears when the module is enabled — the applet is unchanged
   otherwise.
 

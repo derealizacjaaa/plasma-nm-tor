@@ -83,6 +83,29 @@ in
   config = lib.mkIf cfg.enable {
     nixpkgs.overlays = [ self.overlays.default ];
 
+    # Icons: the bridge glyph for the applet button, plus Wi-Fi icons with a
+    # small bridge badge shown in the panel while Tor is connected (they take
+    # precedence over the VPN "-locked" variants; see the main.qml patch).
+    environment.systemPackages = [
+      (pkgs.runCommand "plasma-nm-tor-icons" { } ''
+        dir=$out/share/icons/hicolor/scalable/status
+        install -Dm644 ${./icons/network-tor-bridge.svg} $dir/network-tor-bridge.svg
+
+        # network-wireless-<strength>-tor(-symbolic): arcs lit per strength
+        gen() { # gen <strength> <o1> <o2> <o3>
+          sed -e "s/@O1@/$2/" -e "s/@O2@/$3/" -e "s/@O3@/$4/" \
+            ${./icons/wifi-tor-template.svg} > $dir/network-wireless-$1-tor.svg
+          cp $dir/network-wireless-$1-tor.svg $dir/network-wireless-$1-tor-symbolic.svg
+        }
+        gen 0   0.35 0.35 0.35
+        gen 20  1    0.35 0.35
+        gen 40  1    0.35 0.35
+        gen 60  1    1    0.35
+        gen 80  1    1    1
+        gen 100 1    1    1
+      '')
+    ];
+
     services.tor = {
       enable = true;
       client.enable = true; # SOCKS proxy on 127.0.0.1:9050

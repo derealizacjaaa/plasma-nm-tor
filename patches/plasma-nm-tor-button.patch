@@ -1,7 +1,27 @@
 diff -ruN --unidirectional-new-file a/applet/main.qml b/applet/main.qml
 --- a/applet/main.qml	2026-07-18 05:54:29.934278703 +0200
-+++ b/applet/main.qml	2026-07-18 08:26:03.811353236 +0200
-@@ -68,6 +68,38 @@
++++ b/applet/main.qml	2026-07-18 09:00:05.550823002 +0200
+@@ -46,7 +46,18 @@
+     }
+ 
+     Plasmoid.busy: connectionIconProvider.connecting
+-    Plasmoid.icon: inPanel ? connectionIconProvider.connectionIcon + "-symbolic" : connectionIconProvider.connectionTooltipIcon
++    Plasmoid.icon: {
++        let icon = connectionIconProvider.connectionIcon;
++        // While Tor is connected, badge the Wi-Fi icon with a bridge; this
++        // replaces the VPN "-locked" variant too — Tor wins over the padlock.
++        if (torStatus.running && torStatus.bootstrapped) {
++            const m = icon.match(/^network-wireless-(\d+)(?:-locked|-limited)?$/);
++            if (m) {
++                icon = "network-wireless-" + m[1] + "-tor";
++            }
++        }
++        return inPanel ? icon + "-symbolic" : connectionIconProvider.connectionTooltipIcon;
++    }
+     switchWidth: Kirigami.Units.gridUnit * 10
+     switchHeight: Kirigami.Units.gridUnit * 10
+ 
+@@ -68,6 +79,38 @@
  
      Plasmoid.contextualActions: [
          PlasmaCore.Action {
@@ -21,7 +41,7 @@ diff -ruN --unidirectional-new-file a/applet/main.qml b/applet/main.qml
 +                }
 +                return i18n("Tor connected%1 — SOCKS proxy 127.0.0.1:9050 — click to disconnect", mode);
 +            }
-+            icon.name: "view-private-symbolic"
++            icon.name: "network-tor-bridge"
 +            priority: PlasmaCore.Action.HighPriority
 +            checkable: true
 +            checked: torStatus.running
@@ -40,7 +60,7 @@ diff -ruN --unidirectional-new-file a/applet/main.qml b/applet/main.qml
              text: i18n("Enable Wi-Fi")
              icon.name: "network-wireless-on"
              priority: PlasmaCore.Action.LowPriority
-@@ -135,6 +167,10 @@
+@@ -135,6 +178,10 @@
          id: networkStatus
      }
  
