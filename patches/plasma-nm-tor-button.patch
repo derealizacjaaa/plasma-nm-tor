@@ -1,6 +1,6 @@
 diff -ruN --unidirectional-new-file a/applet/main.qml b/applet/main.qml
 --- a/applet/main.qml	2026-07-18 05:54:29.934278703 +0200
-+++ b/applet/main.qml	2026-07-18 09:00:05.550823002 +0200
++++ b/applet/main.qml	2026-07-18 09:58:23.965971394 +0200
 @@ -46,7 +46,18 @@
      }
  
@@ -39,7 +39,7 @@ diff -ruN --unidirectional-new-file a/applet/main.qml b/applet/main.qml
 +                if (!torStatus.bootstrapped) {
 +                    return i18n("Tor%1: connecting… %2%", mode, torStatus.bootstrapPercent);
 +                }
-+                return i18n("Tor connected%1 — SOCKS proxy 127.0.0.1:9050 — click to disconnect", mode);
++                return i18n("Tor connected%1 — void (127.0.0.1:9050) — click to disconnect", mode);
 +            }
 +            icon.name: "network-tor-bridge"
 +            priority: PlasmaCore.Action.HighPriority
