@@ -1,0 +1,405 @@
+diff -ruN --unidirectional-new-file a/applet/main.qml b/applet/main.qml
+--- a/applet/main.qml	2026-07-18 05:54:29.934278703 +0200
++++ b/applet/main.qml	2026-07-18 08:26:03.811353236 +0200
+@@ -68,6 +68,38 @@
+ 
+     Plasmoid.contextualActions: [
+         PlasmaCore.Action {
++            id: torAction
++            text: {
++                if (!torStatus.running) {
++                    return i18n("Connect to the Tor network");
++                }
++                const mode = torStatus.bridgesMode ? i18n(" via bridges (obfs4)") : "";
++                if (torStatus.stalled) {
++                    return torStatus.bridgesMode
++                        ? i18n("Tor%1: not connecting — click to disconnect", mode)
++                        : i18n("Tor: connection is not progressing — click to retry with bridges (obfs4)");
++                }
++                if (!torStatus.bootstrapped) {
++                    return i18n("Tor%1: connecting… %2%", mode, torStatus.bootstrapPercent);
++                }
++                return i18n("Tor connected%1 — SOCKS proxy 127.0.0.1:9050 — click to disconnect", mode);
++            }
++            icon.name: "view-private-symbolic"
++            priority: PlasmaCore.Action.HighPriority
++            checkable: true
++            checked: torStatus.running
++            visible: torStatus.available
++            onTriggered: {
++                if (!torStatus.running) {
++                    torStatus.start();
++                } else if (torStatus.stalled && !torStatus.bridgesMode) {
++                    torStatus.enableBridges();
++                } else {
++                    torStatus.stop();
++                }
++            }
++        },
++        PlasmaCore.Action {
+             text: i18n("Enable Wi-Fi")
+             icon.name: "network-wireless-on"
+             priority: PlasmaCore.Action.LowPriority
+@@ -135,6 +167,10 @@
+         id: networkStatus
+     }
+ 
++    PlasmaNM.TorStatus {
++        id: torStatus
++    }
++
+     PlasmaNM.ConnectionIcon {
+         id: connectionIconProvider
+         connectivity: networkStatus.connectivity
+diff -ruN --unidirectional-new-file a/libs/CMakeLists.txt b/libs/CMakeLists.txt
+--- a/libs/CMakeLists.txt	2026-07-18 05:54:29.936845041 +0200
++++ b/libs/CMakeLists.txt	2026-07-18 08:05:42.965963834 +0200
+@@ -35,6 +35,7 @@
+     enabledconnections.cpp
+     enums.cpp
+     networkstatus.cpp
++    torstatus.cpp
+     qrcahandler.cpp
+     wirelessstatus.cpp
+     availabledevices.h
+@@ -42,6 +43,7 @@
+     enabledconnections.h
+     enums.h
+     networkstatus.h
++    torstatus.h
+     qrcahandler.h
+     wirelessstatus.h
+ )
+@@ -56,6 +58,8 @@
+     QCoro::Core
+ PRIVATE
+     Qt6::Qml
++    Qt6::DBus
++    Qt6::Network
+     KF6::I18n
+     KF6::JobWidgets
+     KF6::Notifications
+diff -ruN --unidirectional-new-file a/libs/torstatus.cpp b/libs/torstatus.cpp
+--- a/libs/torstatus.cpp	1970-01-01 01:00:00.000000000 +0100
++++ b/libs/torstatus.cpp	2026-07-18 08:05:07.213337906 +0200
+@@ -0,0 +1,237 @@
++/*
++    SPDX-FileCopyrightText: 2026 derealizacja
++
++    SPDX-License-Identifier: LGPL-2.1-only OR LGPL-3.0-only OR LicenseRef-KDE-Accepted-LGPL
++*/
++
++#include "torstatus.h"
++
++#include <QDBusConnection>
++#include <QDBusMessage>
++#include <QDBusPendingCall>
++#include <QDBusPendingCallWatcher>
++#include <QDBusPendingReply>
++#include <QFile>
++#include <QRegularExpression>
++
++namespace
++{
++const QString torUnit = QStringLiteral("tor.service");
++const QString controlSocketPath = QStringLiteral("/run/tor/control");
++const QString bridgesFilePath = QStringLiteral("/etc/tor/bridges.txt");
++// Bootstrap making no progress for this long counts as stalled (blocked network)
++constexpr qint64 stallTimeoutMs = 45'000;
++}
++
++TorStatus::TorStatus(QObject *parent)
++    : QObject(parent)
++{
++    connect(&m_socket, &QLocalSocket::connected, this, &TorStatus::onConnected);
++    connect(&m_socket, &QLocalSocket::disconnected, this, &TorStatus::onDisconnected);
++    connect(&m_socket, &QLocalSocket::errorOccurred, this, [this]() {
++        onDisconnected();
++    });
++    connect(&m_socket, &QLocalSocket::readyRead, this, &TorStatus::onReadyRead);
++
++    m_pollTimer.setInterval(3000);
++    connect(&m_pollTimer, &QTimer::timeout, this, &TorStatus::poll);
++
++    // The unit file existing (in any enablement state) means Tor is set up here
++    QDBusMessage call = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.systemd1"),
++                                                       QStringLiteral("/org/freedesktop/systemd1"),
++                                                       QStringLiteral("org.freedesktop.systemd1.Manager"),
++                                                       QStringLiteral("GetUnitFileState"));
++    call << torUnit;
++    auto watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(call), this);
++    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *watcher) {
++        QDBusPendingReply<QString> reply = *watcher;
++        if (reply.isValid()) {
++            m_available = true;
++            m_pollTimer.start();
++            poll();
++            Q_EMIT torChanged();
++        }
++        watcher->deleteLater();
++    });
++}
++
++bool TorStatus::available() const
++{
++    return m_available;
++}
++
++bool TorStatus::running() const
++{
++    return m_running;
++}
++
++bool TorStatus::bootstrapped() const
++{
++    return m_running && m_bootstrapPercent >= 100;
++}
++
++int TorStatus::bootstrapPercent() const
++{
++    return m_bootstrapPercent;
++}
++
++bool TorStatus::bridgesMode() const
++{
++    return m_bridgesMode;
++}
++
++bool TorStatus::stalled() const
++{
++    return m_stalled;
++}
++
++void TorStatus::manageUnit(const QString &method)
++{
++    QDBusMessage call = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.systemd1"),
++                                                       QStringLiteral("/org/freedesktop/systemd1"),
++                                                       QStringLiteral("org.freedesktop.systemd1.Manager"),
++                                                       method);
++    call << torUnit << QStringLiteral("replace");
++    call.setInteractiveAuthorizationAllowed(true);
++    QDBusConnection::systemBus().asyncCall(call);
++}
++
++void TorStatus::start()
++{
++    m_progressTimer.restart();
++    manageUnit(QStringLiteral("StartUnit"));
++}
++
++void TorStatus::stop()
++{
++    manageUnit(QStringLiteral("StopUnit"));
++    update(false, 0, false);
++}
++
++void TorStatus::enableBridges()
++{
++    if (!m_authenticated) {
++        return;
++    }
++
++    QByteArray command = "SETCONF UseBridges=1";
++    QFile bridges(bridgesFilePath);
++    if (bridges.open(QIODevice::ReadOnly | QIODevice::Text)) {
++        const QList<QByteArray> lines = bridges.readAll().split('\n');
++        for (const QByteArray &line : lines) {
++            const QByteArray trimmed = line.trimmed();
++            if (trimmed.isEmpty() || trimmed.startsWith('#')) {
++                continue;
++            }
++            command += " Bridge=\"" + trimmed + "\"";
++        }
++    }
++    sendCommand(command + "\r\n");
++    m_progressTimer.restart();
++    m_stalled = false;
++    m_bridgesMode = true;
++    Q_EMIT torChanged();
++}
++
++void TorStatus::sendCommand(const QByteArray &command)
++{
++    if (m_socket.state() == QLocalSocket::ConnectedState) {
++        m_socket.write(command);
++    }
++}
++
++void TorStatus::poll()
++{
++    if (m_socket.state() == QLocalSocket::UnconnectedState) {
++        if (QFile::exists(controlSocketPath)) {
++            m_socket.connectToServer(controlSocketPath);
++        } else if (m_running) {
++            update(false, 0, false);
++        }
++        return;
++    }
++
++    if (m_authenticated) {
++        sendCommand("GETINFO status/bootstrap-phase\r\nGETCONF UseBridges\r\n");
++    }
++}
++
++void TorStatus::onConnected()
++{
++    m_authenticated = false;
++    // NixOS control socket is permission-gated, tor side uses NULL auth
++    sendCommand("AUTHENTICATE\r\n");
++}
++
++void TorStatus::onDisconnected()
++{
++    m_authenticated = false;
++    if (m_socket.state() != QLocalSocket::UnconnectedState) {
++        m_socket.abort();
++    }
++    if (m_running) {
++        update(false, 0, false);
++    }
++}
++
++void TorStatus::onReadyRead()
++{
++    static const QRegularExpression progressRx(QStringLiteral("PROGRESS=(\\d+)"));
++
++    bool changed = false;
++    while (m_socket.canReadLine()) {
++        const QByteArray line = m_socket.readLine().trimmed();
++
++        if (!m_authenticated && line.startsWith("250")) {
++            m_authenticated = true;
++            if (!m_running) {
++                m_running = true;
++                m_progressTimer.restart();
++                changed = true;
++            }
++            sendCommand("GETINFO status/bootstrap-phase\r\nGETCONF UseBridges\r\n");
++            continue;
++        }
++
++        if (line.contains("status/bootstrap-phase=")) {
++            const auto match = progressRx.match(QString::fromUtf8(line));
++            if (match.hasMatch()) {
++                const int percent = match.captured(1).toInt();
++                if (percent != m_bootstrapPercent) {
++                    m_bootstrapPercent = percent;
++                    m_progressTimer.restart();
++                    m_stalled = false;
++                    changed = true;
++                }
++            }
++        } else if (line.startsWith("250 UseBridges=") || line.startsWith("250-UseBridges=")) {
++            const bool bridges = line.endsWith("=1");
++            if (bridges != m_bridgesMode) {
++                m_bridgesMode = bridges;
++                changed = true;
++            }
++        }
++    }
++
++    if (m_running && m_bootstrapPercent < 100 && !m_stalled && m_progressTimer.isValid() && m_progressTimer.elapsed() > stallTimeoutMs) {
++        m_stalled = true;
++        changed = true;
++    }
++
++    if (changed) {
++        Q_EMIT torChanged();
++    }
++}
++
++void TorStatus::update(bool running, int percent, bool bridges)
++{
++    if (m_running != running || m_bootstrapPercent != percent || m_bridgesMode != bridges || m_stalled) {
++        m_running = running;
++        m_bootstrapPercent = percent;
++        m_bridgesMode = bridges;
++        m_stalled = false;
++        Q_EMIT torChanged();
++    }
++}
++
++#include "moc_torstatus.cpp"
+diff -ruN --unidirectional-new-file a/libs/torstatus.h b/libs/torstatus.h
+--- a/libs/torstatus.h	1970-01-01 01:00:00.000000000 +0100
++++ b/libs/torstatus.h	2026-07-18 08:05:07.213222157 +0200
+@@ -0,0 +1,79 @@
++/*
++    SPDX-FileCopyrightText: 2026 derealizacja
++
++    SPDX-License-Identifier: LGPL-2.1-only OR LGPL-3.0-only OR LicenseRef-KDE-Accepted-LGPL
++*/
++
++#ifndef PLASMA_NM_TOR_STATUS_H
++#define PLASMA_NM_TOR_STATUS_H
++
++#include <QElapsedTimer>
++#include <QLocalSocket>
++#include <QObject>
++#include <QTimer>
++
++#include <qqmlregistration.h>
++
++/**
++ * Watches and controls the system Tor daemon: state comes from the control
++ * socket (/run/tor/control), start/stop goes through systemd D-Bus (gated by
++ * polkit), and bridge mode is toggled at runtime via SETCONF.
++ */
++class TorStatus : public QObject
++{
++    Q_OBJECT
++    QML_ELEMENT
++
++    /** tor.service unit exists on this system */
++    Q_PROPERTY(bool available READ available NOTIFY torChanged)
++    /** the daemon is running (control socket reachable) */
++    Q_PROPERTY(bool running READ running NOTIFY torChanged)
++    /** bootstrap reached 100% */
++    Q_PROPERTY(bool bootstrapped READ bootstrapped NOTIFY torChanged)
++    Q_PROPERTY(int bootstrapPercent READ bootstrapPercent NOTIFY torChanged)
++    /** UseBridges is currently enabled */
++    Q_PROPERTY(bool bridgesMode READ bridgesMode NOTIFY torChanged)
++    /** bootstrap made no progress for a while — suggests a blocked network */
++    Q_PROPERTY(bool stalled READ stalled NOTIFY torChanged)
++
++public:
++    explicit TorStatus(QObject *parent = nullptr);
++
++    bool available() const;
++    bool running() const;
++    bool bootstrapped() const;
++    int bootstrapPercent() const;
++    bool bridgesMode() const;
++    bool stalled() const;
++
++    Q_INVOKABLE void start();
++    Q_INVOKABLE void stop();
++    Q_INVOKABLE void enableBridges();
++
++Q_SIGNALS:
++    void torChanged();
++
++private Q_SLOTS:
++    void poll();
++    void onReadyRead();
++    void onConnected();
++    void onDisconnected();
++
++private:
++    void sendCommand(const QByteArray &command);
++    void manageUnit(const QString &method);
++    void update(bool running, int percent, bool bridges);
++
++    QLocalSocket m_socket;
++    QTimer m_pollTimer;
++    QElapsedTimer m_progressTimer;
++    bool m_authenticated = false;
++
++    bool m_available = false;
++    bool m_running = false;
++    int m_bootstrapPercent = 0;
++    bool m_bridgesMode = false;
++    bool m_stalled = false;
++};
++
++#endif // PLASMA_NM_TOR_STATUS_H
