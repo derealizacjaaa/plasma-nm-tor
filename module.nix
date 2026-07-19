@@ -99,7 +99,7 @@ in
           Also patch in on-the-fly VPN configuration swapping: expanding a
           VPN/WireGuard connection in the applet lists the configuration
           files (`.ovpn`, `.conf`, `.wg`, `.pcf`) found in
-          `~/.config/plasma-nm/vpn-configs` and `/etc/plasma-nm/vpn-configs`;
+          `~/.config/plasma-nm-vpn-configs` and `/etc/plasma-nm/vpn-configs`;
           clicking one imports it through NetworkManager's VPN plugins,
           overwrites the connection's settings in place (name and UUID are
           kept) and reconnects the tunnel.
@@ -119,7 +119,7 @@ in
           swap feature. Use a plain string path outside the Nix store — VPN
           configs usually embed private keys, which must not end up
           world-readable in `/nix/store`. Per-user files can instead go into
-          `~/.config/plasma-nm/vpn-configs` without any Nix wiring.
+          `~/.config/plasma-nm-vpn-configs` without any Nix wiring.
         '';
       };
     };

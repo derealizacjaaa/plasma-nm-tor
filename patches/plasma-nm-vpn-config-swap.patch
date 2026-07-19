@@ -127,8 +127,8 @@ diff -ruN a/libs/CMakeLists.txt b/libs/CMakeLists.txt
  )
 diff -ruN a/libs/vpnconfigs.cpp b/libs/vpnconfigs.cpp
 --- a/libs/vpnconfigs.cpp	1970-01-01 01:00:00.000000000 +0100
-+++ b/libs/vpnconfigs.cpp	2026-07-19 20:57:40.429826878 +0200
-@@ -0,0 +1,411 @@
++++ b/libs/vpnconfigs.cpp	2026-07-19 21:48:40.732527500 +0200
+@@ -0,0 +1,424 @@
 +/*
 +    SPDX-FileCopyrightText: 2026 derealizacja
 +
@@ -162,8 +162,10 @@ diff -ruN a/libs/vpnconfigs.cpp b/libs/vpnconfigs.cpp
 +
 +QStringList configDirs()
 +{
++    // not "plasma-nm/vpn-configs": upstream plasma-nm uses ~/.config/plasma-nm
++    // as a plain KConfig *file*, so no directory can exist under that name
 +    return {
-+        QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) + QStringLiteral("/plasma-nm/vpn-configs"),
++        QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) + QStringLiteral("/plasma-nm-vpn-configs"),
 +        QStringLiteral("/etc/plasma-nm/vpn-configs"),
 +    };
 +}
@@ -478,6 +480,17 @@ diff -ruN a/libs/vpnconfigs.cpp b/libs/vpnconfigs.cpp
 +        if (ifaceName && *ifaceName) {
 +            g_object_set(importedCon, NM_SETTING_CONNECTION_INTERFACE_NAME, ifaceName, nullptr);
 +        }
++        // DNS priority is leak-protection tuning (e.g. -10 forces the VPN's
++        // resolver) that config files cannot express — carry it over
++        const std::pair<NMSettingIPConfig *, NMSettingIPConfig *> ipSettings[] = {
++            {nm_connection_get_setting_ip4_config(NM_CONNECTION(remote)), nm_connection_get_setting_ip4_config(imported)},
++            {nm_connection_get_setting_ip6_config(NM_CONNECTION(remote)), nm_connection_get_setting_ip6_config(imported)},
++        };
++        for (const auto &[target, dest] : ipSettings) {
++            if (target && dest && nm_setting_ip_config_get_dns_priority(dest) == 0) {
++                g_object_set(dest, NM_SETTING_IP_CONFIG_DNS_PRIORITY, nm_setting_ip_config_get_dns_priority(target), nullptr);
++            }
++        }
 +    } else if (!nm_connection_get_uuid(imported)) {
 +        char *newUuid = nm_utils_uuid_generate();
 +        g_object_set(importedCon, NM_SETTING_CONNECTION_UUID, newUuid, nullptr);
@@ -542,7 +555,7 @@ diff -ruN a/libs/vpnconfigs.cpp b/libs/vpnconfigs.cpp
 +#include "moc_vpnconfigs.cpp"
 diff -ruN a/libs/vpnconfigs.h b/libs/vpnconfigs.h
 --- a/libs/vpnconfigs.h	1970-01-01 01:00:00.000000000 +0100
-+++ b/libs/vpnconfigs.h	2026-07-19 19:50:49.658532298 +0200
++++ b/libs/vpnconfigs.h	2026-07-19 21:48:47.140438842 +0200
 @@ -0,0 +1,86 @@
 +/*
 +    SPDX-FileCopyrightText: 2026 derealizacja
@@ -568,7 +581,7 @@ diff -ruN a/libs/vpnconfigs.h b/libs/vpnconfigs.h
 +/**
 + * On-the-fly VPN configuration swapping for the applet.
 + *
-+ * Watches ~/.config/plasma-nm/vpn-configs and /etc/plasma-nm/vpn-configs for
++ * Watches ~/.config/plasma-nm-vpn-configs and /etc/plasma-nm/vpn-configs for
 + * VPN configuration files (.ovpn, .conf, .wg, .pcf). apply() imports the
 + * chosen file through NetworkManager's own VPN editor plugins (the same
 + * mechanism `nmcli connection import` uses; WireGuard goes through libnm
