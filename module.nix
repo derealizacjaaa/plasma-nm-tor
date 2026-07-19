@@ -79,6 +79,18 @@ in
       description = "Bridge lines appended to `bridges`.";
     };
 
+    vpnButton.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Also patch in a VPN button next to the Tor one: NetworkManager
+        VPN/WireGuard connections become a single header button (toggle, with
+        the provider and IPv4 in the tooltip) instead of entries in the
+        connection list. Independent of the Tor feature; enable if you want
+        both buttons.
+      '';
+    };
+
     transparent.enable = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -108,7 +120,7 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    nixpkgs.overlays = [ self.overlays.default ];
+    nixpkgs.overlays = [ (self.lib.mkOverlay { vpnButton = cfg.vpnButton.enable; }) ];
 
     # Icons: the bridge glyph for the applet button, plus Wi-Fi icons with a
     # small bridge badge shown in the panel while Tor is on. The badged icons

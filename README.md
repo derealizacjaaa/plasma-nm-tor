@@ -53,6 +53,7 @@ session), and restart plasmashell if it was running.
 | Option | Default | Description |
 | --- | --- | --- |
 | `services.plasma-nm-tor.enable` | `false` | The whole feature. |
+| `services.plasma-nm-tor.vpnButton.enable` | `false` | Also add a VPN button: NM VPN/WireGuard connections become a header button (toggle + provider/IPv4 tooltip) instead of connection-list entries. |
 | `services.plasma-nm-tor.users` | `[ ]` | Users added to the `tor` group so the applet can read bootstrap state and switch bridge mode. |
 | `services.plasma-nm-tor.polkitGroup` | `"wheel"` | Group allowed to start/stop `tor.service` without a password. |
 | `services.plasma-nm-tor.autostart` | `false` | Start Tor at boot instead of on demand. |
@@ -62,7 +63,9 @@ session), and restart plasmashell if it was running.
 ## How it works
 
 The flake overlays `kdePackages.plasma-nm` with
-[one patch](patches/plasma-nm-tor-button.patch):
+[the Tor patch](patches/plasma-nm-tor-button.patch) (and, when
+`vpnButton.enable` is set, [the VPN patch](patches/plasma-nm-vpn-button.patch);
+the two touch disjoint regions and compose in any order):
 
 - a small `TorStatus` C++ class (QML singleton-style element) that
   - watches `/run/tor/control` (NixOS's permission-gated control socket) for

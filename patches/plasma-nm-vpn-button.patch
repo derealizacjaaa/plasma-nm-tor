@@ -1,0 +1,244 @@
+diff -ruN --unidirectional-new-file a/applet/main.qml b/applet/main.qml
+--- a/applet/main.qml	2026-07-18 05:54:29.934278703 +0200
++++ b/applet/main.qml	2026-07-18 08:26:15.436277348 +0200
+@@ -108,6 +108,33 @@
+             priority: PlasmaCore.Action.LowPriority
+             visible: networkStatus.connectivity === NMQt.NetworkManager.Portal
+             onTriggered: Qt.openUrlExternally(networkStatus.networkCheckUrl)
++        },
++        PlasmaCore.Action {
++            id: vpnAction
++            text: {
++                if (!networkStatus.vpnAvailable) {
++                    return "";
++                }
++                let details = networkStatus.vpnName;
++                if (networkStatus.vpnActive && networkStatus.vpnIpv4.length > 0) {
++                    details += " — " + networkStatus.vpnIpv4;
++                }
++                return networkStatus.vpnActive
++                    ? i18n("Disconnect VPN (%1)", details)
++                    : i18n("Connect VPN (%1)", details);
++            }
++            icon.name: "network-vpn-symbolic"
++            priority: PlasmaCore.Action.HighPriority
++            checkable: true
++            checked: networkStatus.vpnActive
++            visible: networkStatus.vpnAvailable
++            onTriggered: checked => {
++                if (checked) {
++                    handler.activateConnection(networkStatus.vpnConnectionPath, networkStatus.vpnDevicePath, "");
++                } else {
++                    handler.deactivateConnection(networkStatus.vpnConnectionPath, networkStatus.vpnDevicePath);
++                }
++            }
+         }
+     ]
+ 
+diff -ruN --unidirectional-new-file a/libs/models/appletproxymodel.cpp b/libs/models/appletproxymodel.cpp
+--- a/libs/models/appletproxymodel.cpp	2026-07-18 05:54:29.938364970 +0200
++++ b/libs/models/appletproxymodel.cpp	2026-07-18 08:24:49.409846955 +0200
+@@ -42,6 +42,11 @@
+         return false;
+     }
+ 
++    // VPN/WireGuard connections are toggled via the header button instead of the list
++    if (type == NetworkManager::ConnectionSettings::Vpn || type == NetworkManager::ConnectionSettings::WireGuard) {
++        return false;
++    }
++
+     NetworkModelItem::ItemType itemType = (NetworkModelItem::ItemType)sourceModel()->data(index, NetworkModel::ItemTypeRole).toUInt();
+ 
+     if (itemType != NetworkModelItem::AvailableConnection && itemType != NetworkModelItem::AvailableAccessPoint) {
+diff -ruN --unidirectional-new-file a/libs/networkstatus.cpp b/libs/networkstatus.cpp
+--- a/libs/networkstatus.cpp	2026-07-18 05:54:29.938543057 +0200
++++ b/libs/networkstatus.cpp	2026-07-18 08:24:49.408272427 +0200
+@@ -12,9 +12,17 @@
+ 
+ #include <NetworkManagerQt/ActiveConnection>
+ #include <NetworkManagerQt/Connection>
++#include <NetworkManagerQt/ConnectionSettings>
++#include <NetworkManagerQt/IpConfig>
++#include <NetworkManagerQt/Settings>
+ 
+ #include <KLocalizedString>
+ 
++static bool isVpnLikeType(NetworkManager::ConnectionSettings::ConnectionType type)
++{
++    return type == NetworkManager::ConnectionSettings::Vpn || type == NetworkManager::ConnectionSettings::WireGuard;
++}
++
+ NetworkStatus::SortedConnectionType NetworkStatus::connectionTypeToSortedType(NetworkManager::ConnectionSettings::ConnectionType type)
+ {
+     switch (type) {
+@@ -66,8 +74,13 @@
+     connect(NetworkManager::notifier(), &NetworkManager::Notifier::activeConnectionsChanged, this, QOverload<>::of(&NetworkStatus::activeConnectionsChanged));
+     connect(NetworkManager::notifier(), &NetworkManager::Notifier::connectivityCheckUriChanged, this, &NetworkStatus::networkCheckUrlChanged);
+ 
++    connect(NetworkManager::notifier(), &NetworkManager::Notifier::activeConnectionsChanged, this, &NetworkStatus::updateVpn);
++    connect(NetworkManager::settingsNotifier(), &NetworkManager::SettingsNotifier::connectionAdded, this, &NetworkStatus::updateVpn);
++    connect(NetworkManager::settingsNotifier(), &NetworkManager::SettingsNotifier::connectionRemoved, this, &NetworkStatus::updateVpn);
++
+     activeConnectionsChanged();
+     statusChanged(NetworkManager::status());
++    updateVpn();
+ 
+     QDBusPendingReply<uint> pendingReply = NetworkManager::checkConnectivity();
+     auto callWatcher = new QDBusPendingCallWatcher(pendingReply);
+@@ -249,6 +262,98 @@
+     }
+ }
+ 
++bool NetworkStatus::vpnAvailable() const
++{
++    return m_vpnAvailable;
++}
++
++bool NetworkStatus::vpnActive() const
++{
++    return m_vpnActive;
++}
++
++QString NetworkStatus::vpnName() const
++{
++    return m_vpnName;
++}
++
++QString NetworkStatus::vpnIpv4() const
++{
++    return m_vpnIpv4;
++}
++
++QString NetworkStatus::vpnConnectionPath() const
++{
++    return m_vpnConnectionPath;
++}
++
++QString NetworkStatus::vpnDevicePath() const
++{
++    return m_vpnDevicePath;
++}
++
++void NetworkStatus::updateVpn()
++{
++    bool available = false;
++    bool active = false;
++    QString name;
++    QString ipv4;
++    QString connectionPath;
++    QString devicePath;
++
++    // Prefer an active (or activating) VPN/WireGuard connection
++    for (const NetworkManager::ActiveConnection::Ptr &ac : NetworkManager::activeConnections()) {
++        if (!isVpnLikeType(ac->type())) {
++            continue;
++        }
++
++        connect(ac.data(), &NetworkManager::ActiveConnection::stateChanged, this, &NetworkStatus::updateVpn, Qt::UniqueConnection);
++        connect(ac.data(), &NetworkManager::ActiveConnection::ipV4ConfigChanged, this, &NetworkStatus::updateVpn, Qt::UniqueConnection);
++
++        if (ac->state() != NetworkManager::ActiveConnection::Activated && ac->state() != NetworkManager::ActiveConnection::Activating) {
++            continue;
++        }
++
++        available = true;
++        active = true;
++        NetworkManager::Connection::Ptr connection = ac->connection();
++        name = connection ? connection->name() : ac->id();
++        connectionPath = connection ? connection->path() : QString();
++        if (!ac->devices().isEmpty()) {
++            devicePath = ac->devices().first();
++        }
++        const auto addresses = ac->ipV4Config().addresses();
++        if (!addresses.isEmpty()) {
++            ipv4 = addresses.first().ip().toString();
++        }
++        break;
++    }
++
++    // Otherwise fall back to the first configured VPN/WireGuard profile
++    if (!active) {
++        for (const NetworkManager::Connection::Ptr &con : NetworkManager::listConnections()) {
++            if (!con->settings() || !isVpnLikeType(con->settings()->connectionType())) {
++                continue;
++            }
++            available = true;
++            name = con->name();
++            connectionPath = con->path();
++            break;
++        }
++    }
++
++    if (m_vpnAvailable != available || m_vpnActive != active || m_vpnName != name || m_vpnIpv4 != ipv4 || m_vpnConnectionPath != connectionPath
++        || m_vpnDevicePath != devicePath) {
++        m_vpnAvailable = available;
++        m_vpnActive = active;
++        m_vpnName = name;
++        m_vpnIpv4 = ipv4;
++        m_vpnConnectionPath = connectionPath;
++        m_vpnDevicePath = devicePath;
++        Q_EMIT vpnChanged();
++    }
++}
++
+ QString NetworkStatus::checkUnknownReason() const
+ {
+     // Check if NetworkManager is running.
+diff -ruN --unidirectional-new-file a/libs/networkstatus.h b/libs/networkstatus.h
+--- a/libs/networkstatus.h	2026-07-18 05:54:29.938553428 +0200
++++ b/libs/networkstatus.h	2026-07-18 08:24:49.407543769 +0200
+@@ -33,6 +33,16 @@
+      * Returns the network connectivity state
+      */
+     Q_PROPERTY(NetworkManager::Connectivity connectivity READ connectivity NOTIFY connectivityChanged)
++
++    /**
++     * VPN quick-toggle support: state of the (single) VPN/WireGuard profile
++     */
++    Q_PROPERTY(bool vpnAvailable READ vpnAvailable NOTIFY vpnChanged)
++    Q_PROPERTY(bool vpnActive READ vpnActive NOTIFY vpnChanged)
++    Q_PROPERTY(QString vpnName READ vpnName NOTIFY vpnChanged)
++    Q_PROPERTY(QString vpnIpv4 READ vpnIpv4 NOTIFY vpnChanged)
++    Q_PROPERTY(QString vpnConnectionPath READ vpnConnectionPath NOTIFY vpnChanged)
++    Q_PROPERTY(QString vpnDevicePath READ vpnDevicePath NOTIFY vpnChanged)
+ public:
+     enum SortedConnectionType {
+         Wired,
+@@ -61,21 +71,37 @@
+     NetworkManager::Connectivity connectivity() const;
+     Q_INVOKABLE QString checkUnknownReason() const;
+ 
++    bool vpnAvailable() const;
++    bool vpnActive() const;
++    QString vpnName() const;
++    QString vpnIpv4() const;
++    QString vpnConnectionPath() const;
++    QString vpnDevicePath() const;
++
+ private Q_SLOTS:
+     void activeConnectionsChanged();
+     void defaultChanged();
+     void statusChanged(NetworkManager::Status status);
+     void changeActiveConnections();
++    void updateVpn();
+ 
+ Q_SIGNALS:
+     void activeConnectionsChanged(const QString &activeConnections);
+     void connectivityChanged(NetworkManager::Connectivity connectivity);
+     void networkCheckUrlChanged();
++    void vpnChanged();
+ 
+ private:
+     QString m_activeConnections;
+     QString m_networkStatus;
+     NetworkManager::Connectivity m_connectivity = NetworkManager::UnknownConnectivity;
++
++    bool m_vpnAvailable = false;
++    bool m_vpnActive = false;
++    QString m_vpnName;
++    QString m_vpnIpv4;
++    QString m_vpnConnectionPath;
++    QString m_vpnDevicePath;
+ };
+ 
+ #endif // PLAMA_NM_NETWORK_STATUS_H
