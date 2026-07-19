@@ -111,18 +111,22 @@ in
     nixpkgs.overlays = [ self.overlays.default ];
 
     # Icons: the bridge glyph for the applet button, plus Wi-Fi icons with a
-    # small bridge badge shown in the panel while Tor is connected (they take
-    # precedence over the VPN "-locked" variants; see the main.qml patch).
+    # small bridge badge shown in the panel while Tor is on. The badged icons
+    # use a distinct "wifitor-" namespace on purpose: if we named them
+    # "network-wireless-N-tor", Plasma's desktop-theme lookup would strip the
+    # unknown "-tor" suffix back to "network-wireless-N" and render the plain
+    # base Wi-Fi icon, never reaching our hicolor badge. "wifitor-" has no
+    # base in the desktop theme, so lookup falls through to these icons.
     environment.systemPackages = [
       (pkgs.runCommand "plasma-nm-tor-icons" { } ''
         dir=$out/share/icons/hicolor/scalable/status
         install -Dm644 ${./icons/network-tor-bridge.svg} $dir/network-tor-bridge.svg
 
-        # network-wireless-<strength>-tor(-symbolic): arcs lit per strength
+        # wifitor-<strength>(-symbolic): Wi-Fi arcs lit per strength + bridge
         gen() { # gen <strength> <o1> <o2> <o3>
           sed -e "s/@O1@/$2/" -e "s/@O2@/$3/" -e "s/@O3@/$4/" \
-            ${./icons/wifi-tor-template.svg} > $dir/network-wireless-$1-tor.svg
-          cp $dir/network-wireless-$1-tor.svg $dir/network-wireless-$1-tor-symbolic.svg
+            ${./icons/wifi-tor-template.svg} > $dir/wifitor-$1.svg
+          cp $dir/wifitor-$1.svg $dir/wifitor-$1-symbolic.svg
         }
         gen 0   0.35 0.35 0.35
         gen 20  1    0.35 0.35

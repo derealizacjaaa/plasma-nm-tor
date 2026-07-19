@@ -1,7 +1,7 @@
 diff -ruN --unidirectional-new-file a/applet/main.qml b/applet/main.qml
 --- a/applet/main.qml	2026-07-18 05:54:29.934278703 +0200
-+++ b/applet/main.qml	2026-07-19 18:18:49.972395769 +0200
-@@ -46,7 +46,22 @@
++++ b/applet/main.qml	2026-07-19 18:51:54.757636419 +0200
+@@ -46,7 +46,23 @@
      }
  
      Plasmoid.busy: connectionIconProvider.connecting
@@ -11,12 +11,13 @@ diff -ruN --unidirectional-new-file a/applet/main.qml b/applet/main.qml
 +        let trayIcon = connectionIconProvider.connectionTooltipIcon;
 +        // While Tor mode is on, badge the Wi-Fi icon with a bridge. Triggered
 +        // as soon as the daemon is up (not only at 100% bootstrap) so the
-+        // switch is visible immediately. We strip any suffix (-locked/-limited)
-+        // first, so this also wins over the VPN padlock — Tor beats the lock.
++        // switch is visible immediately. The badged icons use a distinct
++        // "wifitor-" name (not "network-wireless-N-tor") so Plasma's icon
++        // lookup doesn't strip the suffix back to the plain base Wi-Fi icon.
 +        if (torStatus.running) {
 +            const m = panelIcon.match(/^network-wireless-(\d+)/);
 +            if (m) {
-+                panelIcon = "network-wireless-" + m[1] + "-tor";
++                panelIcon = "wifitor-" + m[1];
 +                trayIcon = panelIcon;
 +            }
 +        }
@@ -25,7 +26,7 @@ diff -ruN --unidirectional-new-file a/applet/main.qml b/applet/main.qml
      switchWidth: Kirigami.Units.gridUnit * 10
      switchHeight: Kirigami.Units.gridUnit * 10
  
-@@ -68,6 +83,38 @@
+@@ -68,6 +84,38 @@
  
      Plasmoid.contextualActions: [
          PlasmaCore.Action {
@@ -64,7 +65,7 @@ diff -ruN --unidirectional-new-file a/applet/main.qml b/applet/main.qml
              text: i18n("Enable Wi-Fi")
              icon.name: "network-wireless-on"
              priority: PlasmaCore.Action.LowPriority
-@@ -135,6 +182,10 @@
+@@ -135,6 +183,10 @@
          id: networkStatus
      }
  
