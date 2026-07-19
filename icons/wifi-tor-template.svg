@@ -1,24 +1,96 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22" width="22" height="22">
-  <defs>
-    <style type="text/css" id="current-color-scheme">
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 22 22"
+   width="22"
+   height="22"
+   version="1.1"
+   id="svg9"
+   sodipodi:docname="wifi-tor-template.svg"
+   inkscape:version="1.4.4 (dcaf3e7d9e, 2026-05-05)"
+   xml:space="preserve"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg"><sodipodi:namedview
+     id="namedview9"
+     pagecolor="#505050"
+     bordercolor="#eeeeee"
+     borderopacity="1"
+     inkscape:showpageshadow="0"
+     inkscape:pageopacity="0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#505050"
+     inkscape:zoom="33.327782"
+     inkscape:cx="7.9063167"
+     inkscape:cy="11.626936"
+     inkscape:window-width="1920"
+     inkscape:window-height="1006"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg9" /><defs
+     id="defs1"><style
+       type="text/css"
+       id="current-color-scheme">
       .ColorScheme-Text { color:#232629; }
-    </style>
-    <mask id="badge-cutout">
-      <rect width="22" height="22" fill="white"/>
-      <circle cx="17.5" cy="18.5" r="6.6" fill="black"/>
-    </mask>
-  </defs>
-  <g class="ColorScheme-Text" stroke="currentColor" fill="none" stroke-linecap="round" mask="url(#badge-cutout)">
-    <circle cx="11" cy="17.2" r="1" fill="currentColor" stroke="none"/>
-    <path d="M7.46 14.46 A5 5 0 0 1 14.54 14.46" stroke-width="2" opacity="@O1@"/>
-    <path d="M4.99 11.99 A8.5 8.5 0 0 1 17.01 11.99" stroke-width="2" opacity="@O2@"/>
-    <path d="M2.51 9.51 A12 12 0 0 1 19.49 9.51" stroke-width="2" opacity="@O3@"/>
-  </g>
-  <g class="ColorScheme-Text" stroke="currentColor" fill="none" stroke-linecap="round">
-    <path d="M13.1 20.1 H21.6" stroke-width="1.6"/>
-    <path d="M13.3 19.6 Q17.35 13.9 21.4 19.6" stroke-width="1.3"/>
-    <path d="M15.5 17.3 V19.3" stroke-width="0.9"/>
-    <path d="M17.35 15.9 V19.3" stroke-width="0.9"/>
-    <path d="M19.2 17.3 V19.3" stroke-width="0.9"/>
-  </g>
-</svg>
+    </style><mask
+       id="badge-cutout"><rect
+         width="22"
+         height="22"
+         fill="white"
+         id="rect1" /><circle
+         cx="17.5"
+         cy="18.5"
+         r="6.6"
+         fill="black"
+         id="circle1" /></mask><style
+       type="text/css"
+       id="current-color-scheme-6">
+      .ColorScheme-Text { color:#232629; }
+    </style></defs><g
+     class="ColorScheme-Text"
+     stroke="currentColor"
+     fill="none"
+     stroke-linecap="round"
+     mask="url(#badge-cutout)"
+     id="g4"><circle
+       cx="11"
+       cy="17.2"
+       r="1"
+       fill="currentColor"
+       stroke="none"
+       id="circle2" /><path
+       d="M7.46 14.46 A5 5 0 0 1 14.54 14.46"
+       stroke-width="2"
+       opacity="@O1@"
+       id="path2" /><path
+       d="M4.99 11.99 A8.5 8.5 0 0 1 17.01 11.99"
+       stroke-width="2"
+       opacity="@O2@"
+       id="path3" /><path
+       d="M2.51 9.51 A12 12 0 0 1 19.49 9.51"
+       stroke-width="2"
+       opacity="@O3@"
+       id="path4" /></g><g
+     class="ColorScheme-Text"
+     fill="none"
+     stroke="currentColor"
+     stroke-linecap="round"
+     id="g5"
+     transform="matrix(0.66598756,0,0,0.68173128,11.568581,11.616884)"
+     inkscape:label="g9"><path
+       d="M 1,11.3 H 15"
+       stroke-width="1.4"
+       id="path1" /><path
+       d="M 4,3.5 V 11"
+       stroke-width="1.2"
+       id="path2-7" /><path
+       d="M 12,3.5 V 11"
+       stroke-width="1.2"
+       id="path3-5" /><path
+       d="M 0.8,10.2 Q 2,4.6 4,4.1 q 4,4.7 8,0 2,0.5 3.2,6.1"
+       stroke-width="1"
+       id="path4-3" /><path
+       d="m 8,6.6 v 4"
+       stroke-width="0.8"
+       id="path5" /></g></svg>
