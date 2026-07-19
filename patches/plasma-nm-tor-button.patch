@@ -1,27 +1,31 @@
 diff -ruN --unidirectional-new-file a/applet/main.qml b/applet/main.qml
 --- a/applet/main.qml	2026-07-18 05:54:29.934278703 +0200
-+++ b/applet/main.qml	2026-07-18 09:58:23.965971394 +0200
-@@ -46,7 +46,18 @@
++++ b/applet/main.qml	2026-07-19 18:18:49.972395769 +0200
+@@ -46,7 +46,22 @@
      }
  
      Plasmoid.busy: connectionIconProvider.connecting
 -    Plasmoid.icon: inPanel ? connectionIconProvider.connectionIcon + "-symbolic" : connectionIconProvider.connectionTooltipIcon
 +    Plasmoid.icon: {
-+        let icon = connectionIconProvider.connectionIcon;
-+        // While Tor is connected, badge the Wi-Fi icon with a bridge; this
-+        // replaces the VPN "-locked" variant too — Tor wins over the padlock.
-+        if (torStatus.running && torStatus.bootstrapped) {
-+            const m = icon.match(/^network-wireless-(\d+)(?:-locked|-limited)?$/);
++        let panelIcon = connectionIconProvider.connectionIcon;
++        let trayIcon = connectionIconProvider.connectionTooltipIcon;
++        // While Tor mode is on, badge the Wi-Fi icon with a bridge. Triggered
++        // as soon as the daemon is up (not only at 100% bootstrap) so the
++        // switch is visible immediately. We strip any suffix (-locked/-limited)
++        // first, so this also wins over the VPN padlock — Tor beats the lock.
++        if (torStatus.running) {
++            const m = panelIcon.match(/^network-wireless-(\d+)/);
 +            if (m) {
-+                icon = "network-wireless-" + m[1] + "-tor";
++                panelIcon = "network-wireless-" + m[1] + "-tor";
++                trayIcon = panelIcon;
 +            }
 +        }
-+        return inPanel ? icon + "-symbolic" : connectionIconProvider.connectionTooltipIcon;
++        return inPanel ? panelIcon + "-symbolic" : trayIcon;
 +    }
      switchWidth: Kirigami.Units.gridUnit * 10
      switchHeight: Kirigami.Units.gridUnit * 10
  
-@@ -68,6 +79,38 @@
+@@ -68,6 +83,38 @@
  
      Plasmoid.contextualActions: [
          PlasmaCore.Action {
@@ -60,7 +64,7 @@ diff -ruN --unidirectional-new-file a/applet/main.qml b/applet/main.qml
              text: i18n("Enable Wi-Fi")
              icon.name: "network-wireless-on"
              priority: PlasmaCore.Action.LowPriority
-@@ -135,6 +178,10 @@
+@@ -135,6 +182,10 @@
          id: networkStatus
      }
  
