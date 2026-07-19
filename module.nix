@@ -78,6 +78,33 @@ in
       default = [ ];
       description = "Bridge lines appended to `bridges`.";
     };
+
+    transparent.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Route the whole system through Tor transparently while the daemon is
+        on — no per-app proxy configuration needed. Installs a fail-closed
+        nftables kill-switch (bound to `tor.service`, so it appears and
+        disappears with the button): all TCP is redirected to Tor's TransPort,
+        DNS to its DNSPort, and everything that Tor cannot carry (other UDP,
+        all IPv6) is dropped rather than leaked. LAN and loopback stay direct.
+
+        Trade-off: UDP-only and IPv6-only apps stop working while Tor is on.
+        That is the price of no leaks.
+      '';
+    };
+
+    exclusiveWithVpn = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Treat Tor and NetworkManager VPN/WireGuard connections as mutually
+        exclusive: starting Tor tears down any active VPN, and bringing a VPN
+        up stops Tor. Prevents the broken routing you would otherwise get from
+        transparent Tor stacked on a VPN tunnel.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -110,10 +137,16 @@ in
       enable = true;
       client.enable = true; # SOCKS proxy on 127.0.0.1:9050
       controlSocket.enable = true; # /run/tor/control — applet reads state here
+      # Whole-system routing: TransPort 9040 + DNSPort 9053 + AutomapHosts.
+      client.transparentProxy.enable = cfg.transparent.enable;
+      client.dns.enable = cfg.transparent.enable;
       settings = {
         # Transport ready from the start so SETCONF UseBridges=1 (the applet's
         # stall fallback) works without restarting the daemon.
         ClientTransportPlugin = "meek_lite,obfs2,obfs3,obfs4,scramblesuit,webtunnel exec ${pkgs.obfs4}/bin/lyrebird";
+      }
+      // lib.optionalAttrs cfg.transparent.enable {
+        VirtualAddrNetworkIPv4 = "10.192.0.0/10";
       };
     };
 
@@ -139,5 +172,110 @@ in
         }
       });
     '';
+
+    # ── Transparent routing kill-switch ────────────────────────────────────
+    # A companion unit bound to tor.service: it comes up and down with the
+    # Tor button and installs/removes a fail-closed nftables ruleset. tor's
+    # own traffic (skuid tor) and LAN/loopback stay direct; new TCP is
+    # redirected to TransPort, DNS to DNSPort, and anything Tor cannot carry
+    # is dropped. Uses private tables, so it coexists with the main firewall.
+    systemd.services.tor-transparent = lib.mkIf cfg.transparent.enable {
+      description = "Transparent Tor routing (nftables kill-switch)";
+      bindsTo = [ "tor.service" ];
+      partOf = [ "tor.service" ];
+      after = [ "tor.service" ];
+      wantedBy = [ "tor.service" ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = pkgs.writeShellScript "tor-transparent-up" ''
+          ${lib.optionalString cfg.exclusiveWithVpn ''
+            # Auto-switch: tearing the VPN down before Tor takes over routing.
+            for u in $(${pkgs.networkmanager}/bin/nmcli -t -f UUID,TYPE connection show --active \
+                        | ${pkgs.gnugrep}/bin/grep -E ':(vpn|wireguard)$' \
+                        | ${pkgs.coreutils}/bin/cut -d: -f1); do
+              ${pkgs.networkmanager}/bin/nmcli connection down uuid "$u" || true
+            done
+          ''}
+          ${pkgs.nftables}/bin/nft -f - <<'RULES'
+          table ip tor_nat {
+            chain output {
+              type nat hook output priority -100; policy accept;
+              meta skuid tor return
+              oifname "lo" return
+              ip daddr { 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16 } return
+              meta l4proto udp udp dport 53 redirect to :9053
+              meta l4proto tcp tcp dport 53 redirect to :9053
+              meta l4proto tcp redirect to :9040
+            }
+          }
+          table ip tor_filter {
+            chain output {
+              type filter hook output priority 0; policy drop;
+              meta skuid tor accept
+              oifname "lo" accept
+              ct state established,related accept
+              ip daddr { 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16 } accept
+              meta l4proto tcp accept
+            }
+          }
+          table ip6 tor_filter6 {
+            chain output {
+              type filter hook output priority 0; policy drop;
+              oifname "lo" accept
+              ip6 daddr { ::1, fe80::/10, fc00::/7 } accept
+            }
+          }
+          RULES
+        '';
+        ExecStop = pkgs.writeShellScript "tor-transparent-down" ''
+          ${pkgs.nftables}/bin/nft delete table ip tor_nat 2>/dev/null || true
+          ${pkgs.nftables}/bin/nft delete table ip tor_filter 2>/dev/null || true
+          ${pkgs.nftables}/bin/nft delete table ip6 tor_filter6 2>/dev/null || true
+        '';
+      };
+    };
+
+    # ── VPN → Tor half of the auto-switch ──────────────────────────────────
+    # Bringing up a VPN/WireGuard connection stops Tor (the other direction —
+    # Tor → VPN — is handled above / by tor.service startup below).
+    networking.networkmanager.dispatcherScripts = lib.mkIf cfg.exclusiveWithVpn [
+      {
+        type = "basic";
+        source = pkgs.writeShellScript "tor-vpn-exclusive" ''
+          action="$2"
+          if [ "$action" = "vpn-up" ]; then
+            ${pkgs.systemd}/bin/systemctl stop tor.service || true
+            exit 0
+          fi
+          if [ "$action" = "up" ] && [ -n "$CONNECTION_UUID" ]; then
+            t=$(${pkgs.networkmanager}/bin/nmcli -t -f connection.type connection show "$CONNECTION_UUID" 2>/dev/null | ${pkgs.coreutils}/bin/cut -d: -f2)
+            case "$t" in
+              *wireguard*|*vpn*) ${pkgs.systemd}/bin/systemctl stop tor.service || true ;;
+            esac
+          fi
+        '';
+      }
+    ];
+
+    # Tor → VPN when transparent routing is off (with it on, tor-transparent's
+    # ExecStart already dropped the VPN). Runs as root so nmcli has NM rights.
+    systemd.services.tor-vpn-exclusive = lib.mkIf (cfg.exclusiveWithVpn && !cfg.transparent.enable) {
+      description = "Disconnect VPN/WireGuard when Tor starts";
+      bindsTo = [ "tor.service" ];
+      after = [ "tor.service" ];
+      wantedBy = [ "tor.service" ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = pkgs.writeShellScript "tor-drop-vpn" ''
+          for u in $(${pkgs.networkmanager}/bin/nmcli -t -f UUID,TYPE connection show --active \
+                      | ${pkgs.gnugrep}/bin/grep -E ':(vpn|wireguard)$' \
+                      | ${pkgs.coreutils}/bin/cut -d: -f1); do
+            ${pkgs.networkmanager}/bin/nmcli connection down uuid "$u" || true
+          done
+        '';
+      };
+    };
   };
 }
