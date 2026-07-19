@@ -54,6 +54,8 @@ session), and restart plasmashell if it was running.
 | --- | --- | --- |
 | `services.plasma-nm-tor.enable` | `false` | The whole feature. |
 | `services.plasma-nm-tor.vpnButton.enable` | `false` | Also add a VPN button: NM VPN/WireGuard connections become a header button (toggle + provider/IPv4 tooltip) instead of connection-list entries. |
+| `services.plasma-nm-tor.vpnConfigSwap.enable` | `false` | On-the-fly VPN config swapping: expanding a VPN/WireGuard connection in the applet lists config files from the watched directories; one click imports the file, overwrites the connection in place and reconnects. Not reachable together with `vpnButton.enable` (which hides VPN list entries). |
+| `services.plasma-nm-tor.vpnConfigSwap.directory` | `null` | Directory symlinked to `/etc/plasma-nm/vpn-configs`. Keep it outside the Nix store — VPN configs embed private keys. Per-user files go in `~/.config/plasma-nm/vpn-configs` with no Nix wiring. |
 | `services.plasma-nm-tor.users` | `[ ]` | Users added to the `tor` group so the applet can read bootstrap state and switch bridge mode. |
 | `services.plasma-nm-tor.polkitGroup` | `"wheel"` | Group allowed to start/stop `tor.service` without a password. |
 | `services.plasma-nm-tor.autostart` | `false` | Start Tor at boot instead of on demand. |
@@ -63,9 +65,10 @@ session), and restart plasmashell if it was running.
 ## How it works
 
 The flake overlays `kdePackages.plasma-nm` with
-[the Tor patch](patches/plasma-nm-tor-button.patch) (and, when
-`vpnButton.enable` is set, [the VPN patch](patches/plasma-nm-vpn-button.patch);
-the two touch disjoint regions and compose in any order):
+[the Tor patch](patches/plasma-nm-tor-button.patch) (and, opt-in,
+[the VPN button patch](patches/plasma-nm-vpn-button.patch) and
+[the VPN config swap patch](patches/plasma-nm-vpn-config-swap.patch);
+the patches touch disjoint regions and compose in any order):
 
 - a small `TorStatus` C++ class (QML singleton-style element) that
   - watches `/run/tor/control` (NixOS's permission-gated control socket) for
@@ -75,6 +78,16 @@ the two touch disjoint regions and compose in any order):
     `SETCONF UseBridges=1 Bridge=…`, reading lines from `/etc/tor/bridges.txt`;
 - a high-priority applet action, which Plasma's system tray renders as a small
   icon button in the popup header, next to the configure and pin buttons.
+
+With `vpnConfigSwap.enable`, a `VpnConfigs` C++ class watches
+`~/.config/plasma-nm/vpn-configs` and `/etc/plasma-nm/vpn-configs` for
+`.ovpn`/`.conf`/`.wg`/`.pcf` files and shows them in the expanded view of each
+VPN/WireGuard connection. Clicking a file imports it through NetworkManager's
+own VPN editor plugins (the same machinery `nmcli connection import` uses;
+WireGuard goes through libnm directly), overwrites the connection's settings
+while keeping its name and UUID (a type change — e.g. OpenVPN → WireGuard —
+re-creates the connection under the same name), records the source file in the
+connection's `user` setting (shown as a ✓), and restarts the tunnel.
 
 The NixOS module supplies the matching system side: `services.tor` with the
 SOCKS client, the control socket, the `lyrebird` pluggable transport preloaded

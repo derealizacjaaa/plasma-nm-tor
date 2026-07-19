@@ -16,11 +16,13 @@
 
       # Overlay factory: patch kdePackages.plasma-nm with the applet features
       # you want. The Tor button is always included; the VPN button (VPN as a
-      # header button + hidden from the connection list) is opt-in. The two
-      # patches touch disjoint regions and compose in any order.
+      # header button + hidden from the connection list) and the VPN config
+      # swap (apply .ovpn/.conf files to a connection from the applet) are
+      # opt-in. The patches touch disjoint regions and compose in any order.
       mkOverlay =
         {
           vpnButton ? false,
+          vpnConfigSwap ? false,
         }:
         final: prev: {
           kdePackages = prev.kdePackages.overrideScope (
@@ -29,7 +31,8 @@
                 patches =
                   (old.patches or [ ])
                   ++ [ ./patches/plasma-nm-tor-button.patch ]
-                  ++ nixpkgs.lib.optional vpnButton ./patches/plasma-nm-vpn-button.patch;
+                  ++ nixpkgs.lib.optional vpnButton ./patches/plasma-nm-vpn-button.patch
+                  ++ nixpkgs.lib.optional vpnConfigSwap ./patches/plasma-nm-vpn-config-swap.patch;
               });
             }
           );
@@ -43,6 +46,11 @@
       overlays.default = mkOverlay { };
       # Tor button + VPN-as-header-button.
       overlays.withVpnButton = mkOverlay { vpnButton = true; };
+      # Everything: Tor button + VPN button + VPN config swap.
+      overlays.full = mkOverlay {
+        vpnButton = true;
+        vpnConfigSwap = true;
+      };
 
       # services.plasma-nm-tor.* — overlay + tor daemon + polkit in one switch.
       nixosModules.default = import ./module.nix self;
@@ -60,6 +68,7 @@
         {
           plasma-nm = (pkgsFor self.overlays.default).kdePackages.plasma-nm;
           plasma-nm-with-vpn = (pkgsFor self.overlays.withVpnButton).kdePackages.plasma-nm;
+          plasma-nm-full = (pkgsFor self.overlays.full).kdePackages.plasma-nm;
           default = (pkgsFor self.overlays.default).kdePackages.plasma-nm;
         }
       );

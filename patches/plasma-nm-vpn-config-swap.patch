@@ -1,0 +1,632 @@
+diff -ruN a/applet/ConnectionItem.qml b/applet/ConnectionItem.qml
+--- a/applet/ConnectionItem.qml	2026-07-19 19:45:26.654787905 +0200
++++ b/applet/ConnectionItem.qml	2026-07-19 20:55:09.062887555 +0200
+@@ -37,6 +37,11 @@
+     property real rxSpeed: 0
+     property real txSpeed: 0
+ 
++    // On-the-fly VPN config swap: saved VPN/WireGuard connections can have a
++    // config file from the watched directories applied in place
++    property bool configSwappable: model.Uuid !== "" && vpnConfigs.isSwappable(model.Type)
++    property string appliedConfig: ""
++
+     property alias passwordDialogComponent: passwordDialogComponent
+ 
+     icon: model.ConnectionIcon
+@@ -206,6 +211,53 @@
+                 }
+             }
+ 
++            Column {
++                anchors {
++                    left: parent.left
++                    right: parent.right
++                }
++                visible: connectionItem.configSwappable && configRepeater.count > 0 && detailsTabBar.currentIndex === 1
++
++                Kirigami.Separator {
++                    anchors {
++                        left: parent.left
++                        right: parent.right
++                    }
++                }
++
++                PlasmaComponents3.Label {
++                    text: i18n("Swap configuration")
++                    font: Kirigami.Theme.smallFont
++                    opacity: 0.7
++                    leftPadding: Kirigami.Units.smallSpacing
++                    topPadding: Kirigami.Units.smallSpacing
++                }
++
++                Repeater {
++                    id: configRepeater
++                    model: vpnConfigs.configs
++
++                    delegate: PlasmaComponents3.ItemDelegate {
++                        id: configDelegate
++
++                        required property var modelData
++
++                        readonly property bool isCurrent: modelData.path === connectionItem.appliedConfig
++
++                        width: parent.width
++                        text: modelData.name
++                        icon.name: isCurrent ? "checkmark" : "document-replace"
++                        enabled: !vpnConfigs.busy
++
++                        PlasmaComponents3.ToolTip.text: configDelegate.modelData.path
++                        PlasmaComponents3.ToolTip.visible: hovered
++                        PlasmaComponents3.ToolTip.delay: Kirigami.Units.toolTipDelay
++
++                        onClicked: vpnConfigs.apply(modelData.path, connectionItem.model.Uuid)
++                    }
++                }
++            }
++
+         }
+     }
+ 
+@@ -320,6 +372,24 @@
+         }
+     }
+ 
++    Connections {
++        target: vpnConfigs
++        enabled: connectionItem.configSwappable
++
++        function onApplied(uuid) {
++            if (uuid === connectionItem.model.Uuid) {
++                connectionItem.appliedConfig = vpnConfigs.currentConfig(uuid);
++            }
++        }
++    }
++
++    onItemExpanded: {
++        if (configSwappable) {
++            vpnConfigs.refresh();
++            appliedConfig = vpnConfigs.currentConfig(model.Uuid);
++        }
++    }
++
+     onItemCollapsed: {
+         connectionItem.customExpandedViewContent = detailsComponent;
+         setDelayModelUpdates(false);
+diff -ruN a/applet/main.qml b/applet/main.qml
+--- a/applet/main.qml	2026-07-19 19:45:26.685938651 +0200
++++ b/applet/main.qml	2026-07-19 19:51:43.067158019 +0200
+@@ -187,6 +187,10 @@
+         id: torStatus
+     }
+ 
++    PlasmaNM.VpnConfigs {
++        id: vpnConfigs
++    }
++
+     PlasmaNM.ConnectionIcon {
+         id: connectionIconProvider
+         connectivity: networkStatus.connectivity
+diff -ruN a/libs/CMakeLists.txt b/libs/CMakeLists.txt
+--- a/libs/CMakeLists.txt	2026-07-19 19:45:26.686075253 +0200
++++ b/libs/CMakeLists.txt	2026-07-19 19:51:21.643306468 +0200
+@@ -36,6 +36,7 @@
+     enums.cpp
+     networkstatus.cpp
+     torstatus.cpp
++    vpnconfigs.cpp
+     qrcahandler.cpp
+     wirelessstatus.cpp
+     availabledevices.h
+@@ -44,6 +45,7 @@
+     enums.h
+     networkstatus.h
+     torstatus.h
++    vpnconfigs.h
+     qrcahandler.h
+     wirelessstatus.h
+ )
+diff -ruN a/libs/vpnconfigs.cpp b/libs/vpnconfigs.cpp
+--- a/libs/vpnconfigs.cpp	1970-01-01 01:00:00.000000000 +0100
++++ b/libs/vpnconfigs.cpp	2026-07-19 20:57:40.429826878 +0200
+@@ -0,0 +1,411 @@
++/*
++    SPDX-FileCopyrightText: 2026 derealizacja
++
++    SPDX-License-Identifier: LGPL-2.1-only OR LGPL-3.0-only OR LicenseRef-KDE-Accepted-LGPL
++*/
++
++#include "vpnconfigs.h"
++
++#include <QDir>
++#include <QFile>
++#include <QFileInfo>
++#include <QPointer>
++#include <QStandardPaths>
++#include <QTimer>
++
++#include <utility>
++
++#include <KLocalizedString>
++#include <KNotification>
++
++#include <NetworkManagerQt/ActiveConnection>
++#include <NetworkManagerQt/ConnectionSettings>
++#include <NetworkManagerQt/Manager>
++
++#include <NetworkManager.h>
++
++namespace
++{
++// stamped into the connection (user setting) so the UI can mark the file in use
++const char *configFileUserKey = "org.kde.plasma-nm.config-file";
++
++QStringList configDirs()
++{
++    return {
++        QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) + QStringLiteral("/plasma-nm/vpn-configs"),
++        QStringLiteral("/etc/plasma-nm/vpn-configs"),
++    };
++}
++}
++
++/** Everything a glib async callback needs to hop back into the Qt world. */
++struct VpnConfigsCallbackData {
++    QPointer<VpnConfigs> self;
++    QString uuid; // uuid the swapped connection ends up with
++    QString connectionPath; // D-Bus path to activate afterwards (empty until known)
++    QString name;
++    bool wasActive = false;
++    GVariant *settings = nullptr; // owned reference to the imported settings
++
++    ~VpnConfigsCallbackData()
++    {
++        if (settings) {
++            g_variant_unref(settings);
++        }
++    }
++};
++
++VpnConfigs::VpnConfigs(QObject *parent)
++    : QObject(parent)
++    , m_dirs(configDirs())
++{
++    connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, &VpnConfigs::scan);
++    refresh();
++}
++
++VpnConfigs::~VpnConfigs()
++{
++    if (m_client) {
++        g_object_unref(m_client);
++    }
++}
++
++QVariantList VpnConfigs::configs() const
++{
++    return m_configs;
++}
++
++bool VpnConfigs::busy() const
++{
++    return m_busy;
++}
++
++void VpnConfigs::refresh()
++{
++    // directories may appear after startup — (re-)arm the watcher lazily
++    for (const QString &dir : std::as_const(m_dirs)) {
++        if (QFileInfo::exists(dir) && !m_watcher.directories().contains(dir)) {
++            m_watcher.addPath(dir);
++        }
++    }
++    scan();
++}
++
++void VpnConfigs::scan()
++{
++    static const QStringList nameFilters = {
++        QStringLiteral("*.ovpn"),
++        QStringLiteral("*.conf"),
++        QStringLiteral("*.wg"),
++        QStringLiteral("*.pcf"),
++    };
++
++    QVariantList found;
++    for (const QString &dir : std::as_const(m_dirs)) {
++        const QFileInfoList entries = QDir(dir).entryInfoList(nameFilters, QDir::Files | QDir::Readable, QDir::Name);
++        for (const QFileInfo &entry : entries) {
++            found.append(QVariantMap{
++                {QStringLiteral("name"), entry.completeBaseName()},
++                {QStringLiteral("path"), entry.absoluteFilePath()},
++            });
++        }
++    }
++
++    if (found != m_configs) {
++        m_configs = found;
++        Q_EMIT configsChanged();
++    }
++}
++
++bool VpnConfigs::isSwappable(int type) const
++{
++    return type == NetworkManager::ConnectionSettings::Vpn || type == NetworkManager::ConnectionSettings::WireGuard;
++}
++
++void VpnConfigs::setBusy(bool busy)
++{
++    if (m_busy != busy) {
++        m_busy = busy;
++        Q_EMIT busyChanged();
++    }
++}
++
++NMClient *VpnConfigs::client()
++{
++    if (!m_client) {
++        GError *error = nullptr;
++        m_client = nm_client_new(nullptr, &error);
++        if (!m_client) {
++            qWarning("VpnConfigs: cannot create NMClient: %s", error ? error->message : "unknown");
++            g_clear_error(&error);
++        }
++    }
++    return m_client;
++}
++
++QString VpnConfigs::currentConfig(const QString &uuid)
++{
++    NMClient *c = client();
++    if (!c) {
++        return {};
++    }
++    NMRemoteConnection *remote = nm_client_get_connection_by_uuid(c, uuid.toUtf8().constData());
++    if (!remote) {
++        return {};
++    }
++    auto *user = NM_SETTING_USER(nm_connection_get_setting(NM_CONNECTION(remote), NM_TYPE_SETTING_USER));
++    if (!user) {
++        return {};
++    }
++    return QString::fromUtf8(nm_setting_user_get_data(user, configFileUserKey));
++}
++
++/**
++ * Import a configuration file into an in-memory NMConnection: WireGuard
++ * directly through libnm, everything else through the import capability of
++ * NetworkManager's VPN editor plugins (found via /etc/NetworkManager/VPN and
++ * the compiled-in plugin dir — the same lookup nmcli uses).
++ */
++NMConnection *VpnConfigs::importFile(const QString &filePath, QString &errorOut) const
++{
++    const QByteArray nativePath = QFile::encodeName(filePath);
++    const QString ext = QFileInfo(filePath).suffix().toLower();
++
++#if NM_CHECK_VERSION(1, 40, 0)
++    if (ext == QLatin1String("wg") || ext == QLatin1String("conf")) {
++        GError *error = nullptr;
++        NMConnection *connection = nm_conn_wireguard_import(nativePath.constData(), &error);
++        if (connection) {
++            return connection;
++        }
++        errorOut = QString::fromUtf8(error ? error->message : "");
++        g_clear_error(&error);
++        // a .conf might still be OpenVPN/other — fall through to the plugins
++    }
++#endif
++
++    GSList *plugins = nm_vpn_plugin_info_list_load();
++    NMConnection *connection = nullptr;
++    for (GSList *it = plugins; it && !connection; it = it->next) {
++        auto *info = NM_VPN_PLUGIN_INFO(it->data);
++        NMVpnEditorPlugin *editor = nm_vpn_plugin_info_load_editor_plugin(info, nullptr);
++        if (!editor || !(nm_vpn_editor_plugin_get_capabilities(editor) & NM_VPN_EDITOR_PLUGIN_CAPABILITY_IMPORT)) {
++            continue;
++        }
++        GError *error = nullptr;
++        connection = nm_vpn_editor_plugin_import(editor, nativePath.constData(), &error);
++        if (!connection) {
++            if (error && errorOut.isEmpty()) {
++                errorOut = QString::fromUtf8(error->message);
++            }
++            g_clear_error(&error);
++        }
++    }
++    g_slist_free_full(plugins, g_object_unref);
++
++    if (!connection && errorOut.isEmpty()) {
++        errorOut = i18n("No NetworkManager VPN plugin could import this file");
++    }
++    return connection;
++}
++
++void VpnConfigs::fail(const QString &message)
++{
++    setBusy(false);
++    Q_EMIT applyFailed(message);
++
++    auto *notification = new KNotification(QStringLiteral("FailedToUpdateConnection"), KNotification::CloseOnTimeout, this);
++    notification->setComponentName(QStringLiteral("networkmanagement"));
++    notification->setTitle(i18n("Failed to swap VPN configuration"));
++    notification->setText(message);
++    notification->setIconName(QStringLiteral("dialog-warning"));
++    notification->sendEvent();
++}
++
++void VpnConfigs::notifySuccess(const QString &name)
++{
++    auto *notification = new KNotification(QStringLiteral("ConnectionUpdated"), KNotification::CloseOnTimeout, this);
++    notification->setComponentName(QStringLiteral("networkmanagement"));
++    notification->setTitle(name);
++    notification->setText(i18n("VPN configuration swapped, reconnecting"));
++    notification->setIconName(QStringLiteral("dialog-information"));
++    notification->sendEvent();
++}
++
++void VpnConfigs::update2Callback(GObject *source, GAsyncResult *result, void *userData)
++{
++    auto *data = static_cast<VpnConfigsCallbackData *>(userData);
++    GError *error = nullptr;
++    GVariant *ret = nm_remote_connection_update2_finish(NM_REMOTE_CONNECTION(source), result, &error);
++    if (ret) {
++        g_variant_unref(ret);
++    }
++    if (data->self) {
++        if (error) {
++            data->self->fail(QString::fromUtf8(error->message));
++        } else {
++            data->self->notifySuccess(data->name);
++            data->self->finishApply(data->uuid, data->connectionPath, data->wasActive);
++        }
++    }
++    g_clear_error(&error);
++    delete data;
++}
++
++void VpnConfigs::addCallback(GObject *source, GAsyncResult *result, void *userData)
++{
++    auto *data = static_cast<VpnConfigsCallbackData *>(userData);
++    GError *error = nullptr;
++    NMRemoteConnection *remote = nm_client_add_connection2_finish(NM_CLIENT(source), result, nullptr, &error);
++    if (data->self) {
++        if (error) {
++            data->self->fail(QString::fromUtf8(error->message));
++        } else {
++            data->self->notifySuccess(data->name);
++            data->self->finishApply(QString::fromUtf8(nm_connection_get_uuid(NM_CONNECTION(remote))),
++                                    QString::fromUtf8(nm_object_get_path(NM_OBJECT(remote))),
++                                    data->wasActive);
++        }
++    }
++    if (remote) {
++        g_object_unref(remote);
++    }
++    g_clear_error(&error);
++    delete data;
++}
++
++void VpnConfigs::deleteCallback(GObject *source, GAsyncResult *result, void *userData)
++{
++    auto *data = static_cast<VpnConfigsCallbackData *>(userData);
++    GError *error = nullptr;
++    nm_remote_connection_delete_finish(NM_REMOTE_CONNECTION(source), result, &error);
++    if (!data->self) {
++        g_clear_error(&error);
++        delete data;
++        return;
++    }
++    if (error) {
++        data->self->fail(QString::fromUtf8(error->message));
++        g_clear_error(&error);
++        delete data;
++        return;
++    }
++    // old connection is gone — add the imported one under the same name
++    nm_client_add_connection2(data->self->client(),
++                              data->settings,
++                              NM_SETTINGS_ADD_CONNECTION2_FLAG_TO_DISK,
++                              nullptr,
++                              TRUE,
++                              nullptr,
++                              addCallback,
++                              data);
++}
++
++void VpnConfigs::apply(const QString &filePath, const QString &uuid)
++{
++    if (m_busy) {
++        return;
++    }
++    setBusy(true);
++
++    QString importError;
++    NMConnection *imported = importFile(filePath, importError);
++    if (!imported) {
++        fail(i18n("Could not import %1: %2", QFileInfo(filePath).fileName(), importError));
++        return;
++    }
++
++    NMClient *c = client();
++    NMRemoteConnection *remote = c ? nm_client_get_connection_by_uuid(c, uuid.toUtf8().constData()) : nullptr;
++    if (!remote) {
++        g_object_unref(imported);
++        fail(i18n("The connection to update no longer exists"));
++        return;
++    }
++
++    NMSettingConnection *importedCon = nm_connection_get_setting_connection(imported);
++    NMSettingConnection *targetCon = nm_connection_get_setting_connection(NM_CONNECTION(remote));
++    if (!importedCon || !targetCon) {
++        g_object_unref(imported);
++        fail(i18n("Imported file has no connection settings"));
++        return;
++    }
++
++    const bool sameType = qstrcmp(nm_connection_get_connection_type(imported), nm_connection_get_connection_type(NM_CONNECTION(remote))) == 0;
++
++    // The swap keeps the connection's identity: same name, same autoconnect,
++    // and (when the type allows updating in place) the same UUID.
++    g_object_set(importedCon,
++                 NM_SETTING_CONNECTION_ID,
++                 nm_connection_get_id(NM_CONNECTION(remote)),
++                 NM_SETTING_CONNECTION_AUTOCONNECT,
++                 nm_setting_connection_get_autoconnect(targetCon),
++                 nullptr);
++    if (sameType) {
++        g_object_set(importedCon, NM_SETTING_CONNECTION_UUID, nm_connection_get_uuid(NM_CONNECTION(remote)), nullptr);
++        const char *ifaceName = nm_setting_connection_get_interface_name(targetCon);
++        if (ifaceName && *ifaceName) {
++            g_object_set(importedCon, NM_SETTING_CONNECTION_INTERFACE_NAME, ifaceName, nullptr);
++        }
++    } else if (!nm_connection_get_uuid(imported)) {
++        char *newUuid = nm_utils_uuid_generate();
++        g_object_set(importedCon, NM_SETTING_CONNECTION_UUID, newUuid, nullptr);
++        g_free(newUuid);
++    }
++
++    // remember which file this connection now runs on (shown as ✓ in the UI)
++    auto *user = NM_SETTING_USER(nm_setting_user_new());
++    nm_setting_user_set_data(user, configFileUserKey, filePath.toUtf8().constData(), nullptr);
++    nm_connection_add_setting(imported, NM_SETTING(user));
++
++    bool wasActive = false;
++    const auto activeConnections = NetworkManager::activeConnections();
++    for (const NetworkManager::ActiveConnection::Ptr &active : activeConnections) {
++        if (active->uuid() == uuid) {
++            wasActive = true;
++            break;
++        }
++    }
++
++    auto *data = new VpnConfigsCallbackData;
++    data->self = this;
++    data->uuid = QString::fromUtf8(nm_connection_get_uuid(imported));
++    data->name = QString::fromUtf8(nm_connection_get_id(imported));
++    data->wasActive = wasActive;
++    data->settings = g_variant_ref_sink(nm_connection_to_dbus(imported, NM_CONNECTION_SERIALIZE_ALL));
++    g_object_unref(imported);
++
++    if (sameType) {
++        data->connectionPath = QString::fromUtf8(nm_object_get_path(NM_OBJECT(remote)));
++        nm_remote_connection_update2(remote, data->settings, NM_SETTINGS_UPDATE2_FLAG_TO_DISK, nullptr, nullptr, update2Callback, data);
++    } else {
++        // e.g. OpenVPN → WireGuard: the type cannot change in place, so the
++        // old connection is deleted and the import added under the same name
++        nm_remote_connection_delete_async(remote, nullptr, deleteCallback, data);
++    }
++}
++
++void VpnConfigs::finishApply(const QString &uuid, const QString &connectionPath, bool wasActive)
++{
++    if (wasActive) {
++        const auto activeConnections = NetworkManager::activeConnections();
++        for (const NetworkManager::ActiveConnection::Ptr &active : activeConnections) {
++            if (active->uuid() == uuid) {
++                NetworkManager::deactivateConnection(active->path());
++            }
++        }
++    }
++
++    Q_EMIT applied(uuid);
++
++    // give NM a moment to tear the old tunnel down before bringing up the new one
++    QPointer<VpnConfigs> guard(this);
++    QTimer::singleShot(wasActive ? 800 : 100, this, [guard, connectionPath]() {
++        NetworkManager::activateConnection(connectionPath, QStringLiteral("/"), QStringLiteral("/"));
++        if (guard) {
++            guard->setBusy(false);
++        }
++    });
++}
++
++#include "moc_vpnconfigs.cpp"
+diff -ruN a/libs/vpnconfigs.h b/libs/vpnconfigs.h
+--- a/libs/vpnconfigs.h	1970-01-01 01:00:00.000000000 +0100
++++ b/libs/vpnconfigs.h	2026-07-19 19:50:49.658532298 +0200
+@@ -0,0 +1,86 @@
++/*
++    SPDX-FileCopyrightText: 2026 derealizacja
++
++    SPDX-License-Identifier: LGPL-2.1-only OR LGPL-3.0-only OR LicenseRef-KDE-Accepted-LGPL
++*/
++
++#ifndef PLASMA_NM_VPN_CONFIGS_H
++#define PLASMA_NM_VPN_CONFIGS_H
++
++#include <QFileSystemWatcher>
++#include <QObject>
++#include <QVariantList>
++
++#include <qqmlregistration.h>
++
++typedef struct _NMClient NMClient;
++typedef struct _NMConnection NMConnection;
++typedef struct _NMRemoteConnection NMRemoteConnection;
++typedef struct _GObject GObject;
++typedef struct _GAsyncResult GAsyncResult;
++
++/**
++ * On-the-fly VPN configuration swapping for the applet.
++ *
++ * Watches ~/.config/plasma-nm/vpn-configs and /etc/plasma-nm/vpn-configs for
++ * VPN configuration files (.ovpn, .conf, .wg, .pcf). apply() imports the
++ * chosen file through NetworkManager's own VPN editor plugins (the same
++ * mechanism `nmcli connection import` uses; WireGuard goes through libnm
++ * directly), overwrites the settings of an existing connection while keeping
++ * its name and UUID, and reactivates the tunnel.
++ */
++class VpnConfigs : public QObject
++{
++    Q_OBJECT
++    QML_ELEMENT
++
++    /** list of {name, path} maps, one per discovered configuration file */
++    Q_PROPERTY(QVariantList configs READ configs NOTIFY configsChanged)
++    /** an apply() is in flight */
++    Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
++
++public:
++    explicit VpnConfigs(QObject *parent = nullptr);
++    ~VpnConfigs() override;
++
++    QVariantList configs() const;
++    bool busy() const;
++
++    /** rescan the config directories (call when the item expands) */
++    Q_INVOKABLE void refresh();
++    /** whether a connection of this NM type can have its config swapped */
++    Q_INVOKABLE bool isSwappable(int type) const;
++    /** path of the config file last applied to the connection, if recorded */
++    Q_INVOKABLE QString currentConfig(const QString &uuid);
++    /** import filePath and swap it into the connection identified by uuid */
++    Q_INVOKABLE void apply(const QString &filePath, const QString &uuid);
++
++Q_SIGNALS:
++    void configsChanged();
++    void busyChanged();
++    /** the swap finished and the connection (possibly re-created) is activating */
++    void applied(const QString &uuid);
++    void applyFailed(const QString &message);
++
++private:
++    void scan();
++    void setBusy(bool busy);
++    NMClient *client();
++    NMConnection *importFile(const QString &filePath, QString &errorOut) const;
++    void finishApply(const QString &uuid, const QString &connectionPath, bool wasActive);
++    void fail(const QString &message);
++    void notifySuccess(const QString &name);
++
++    // glib async callbacks (GAsyncReadyCallback-compatible)
++    static void update2Callback(GObject *source, GAsyncResult *result, void *userData);
++    static void deleteCallback(GObject *source, GAsyncResult *result, void *userData);
++    static void addCallback(GObject *source, GAsyncResult *result, void *userData);
++
++    QFileSystemWatcher m_watcher;
++    QStringList m_dirs;
++    QVariantList m_configs;
++    NMClient *m_client = nullptr;
++    bool m_busy = false;
++};
++
++#endif // PLASMA_NM_VPN_CONFIGS_H

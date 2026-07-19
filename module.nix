@@ -91,6 +91,39 @@ in
       '';
     };
 
+    vpnConfigSwap = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Also patch in on-the-fly VPN configuration swapping: expanding a
+          VPN/WireGuard connection in the applet lists the configuration
+          files (`.ovpn`, `.conf`, `.wg`, `.pcf`) found in
+          `~/.config/plasma-nm/vpn-configs` and `/etc/plasma-nm/vpn-configs`;
+          clicking one imports it through NetworkManager's VPN plugins,
+          overwrites the connection's settings in place (name and UUID are
+          kept) and reconnects the tunnel.
+
+          Note: the swap list lives in the connection-list entry, which
+          `vpnButton.enable` hides — with both enabled the swap UI is
+          unreachable.
+        '';
+      };
+
+      directory = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "/persist/vpn-configs";
+        description = ''
+          Directory symlinked to `/etc/plasma-nm/vpn-configs` for the config
+          swap feature. Use a plain string path outside the Nix store — VPN
+          configs usually embed private keys, which must not end up
+          world-readable in `/nix/store`. Per-user files can instead go into
+          `~/.config/plasma-nm/vpn-configs` without any Nix wiring.
+        '';
+      };
+    };
+
     transparent.enable = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -120,7 +153,22 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    nixpkgs.overlays = [ (self.lib.mkOverlay { vpnButton = cfg.vpnButton.enable; }) ];
+    nixpkgs.overlays = [
+      (self.lib.mkOverlay {
+        vpnButton = cfg.vpnButton.enable;
+        vpnConfigSwap = cfg.vpnConfigSwap.enable;
+      })
+    ];
+
+    warnings = lib.optional (cfg.vpnButton.enable && cfg.vpnConfigSwap.enable) ''
+      services.plasma-nm-tor: vpnButton.enable hides VPN connections from the
+      applet's connection list, which is where vpnConfigSwap's file list is
+      shown — with both enabled the config swap UI is unreachable.
+    '';
+
+    environment.etc."plasma-nm/vpn-configs" = lib.mkIf (cfg.vpnConfigSwap.directory != null) {
+      source = cfg.vpnConfigSwap.directory;
+    };
 
     # Icons: the bridge glyph for the applet button, plus Wi-Fi icons with a
     # small bridge badge shown in the panel while Tor is on. The badged icons
