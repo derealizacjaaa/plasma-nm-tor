@@ -54,7 +54,7 @@ session), and restart plasmashell if it was running.
 | --- | --- | --- |
 | `services.plasma-nm-tor.enable` | `false` | The whole feature. |
 | `services.plasma-nm-tor.vpnButton.enable` | `false` | Also add a VPN button: NM VPN/WireGuard connections become a header button (toggle + provider/IPv4 tooltip) instead of connection-list entries. |
-| `services.plasma-nm-tor.vpnConfigSwap.enable` | `false` | On-the-fly VPN config swapping: expanding a VPN/WireGuard connection in the applet lists config files from the watched directories; one click imports the file, overwrites the connection in place and reconnects. Not reachable together with `vpnButton.enable` (which hides VPN list entries). |
+| `services.plasma-nm-tor.vpnConfigSwap.enable` | `false` | On-the-fly VPN config swapping: adds a dedicated "VPN" page to System Settings (next to Wi-Fi & Networking) listing config files from the watched directories; one click imports the file, overwrites the chosen connection in place and reconnects. |
 | `services.plasma-nm-tor.vpnConfigSwap.directory` | `null` | Directory symlinked to `/etc/plasma-nm/vpn-configs`. Keep it outside the Nix store — VPN configs embed private keys. Per-user files go in `~/.config/plasma-nm-vpn-configs` with no Nix wiring. |
 | `services.plasma-nm-tor.users` | `[ ]` | Users added to the `tor` group so the applet can read bootstrap state and switch bridge mode. |
 | `services.plasma-nm-tor.polkitGroup` | `"wheel"` | Group allowed to start/stop `tor.service` without a password. |
@@ -81,15 +81,17 @@ the patches touch disjoint regions and compose in any order):
 
 With `vpnConfigSwap.enable`, a `VpnConfigs` C++ class watches
 `~/.config/plasma-nm-vpn-configs` and `/etc/plasma-nm/vpn-configs` for
-`.ovpn`/`.conf`/`.wg`/`.pcf` files and shows them in the expanded view of each
-VPN/WireGuard connection. Clicking a file imports it through NetworkManager's
-own VPN editor plugins (the same machinery `nmcli connection import` uses;
-WireGuard goes through libnm directly), overwrites the connection's settings
-while keeping its name, UUID and DNS priority (leak-protection tuning like
-`ipv4.dns-priority=-10` survives the swap; a type change — e.g. OpenVPN →
-WireGuard — re-creates the connection under the same name), records the source
-file in the connection's `user` setting (shown as a ✓), and restarts the
-tunnel.
+`.ovpn`/`.conf`/`.wg`/`.pcf` files, and a new System Settings module
+(`kcm_vpnconfigs`, the "VPN" sidebar entry under Wi-Fi & Networking) lists
+them per VPN/WireGuard connection. Clicking a file imports it through
+NetworkManager's own VPN editor plugins (the same machinery
+`nmcli connection import` uses; WireGuard goes through libnm directly),
+overwrites the connection's settings while keeping its name, UUID and DNS
+priority (leak-protection tuning like `ipv4.dns-priority=-10` survives the
+swap; a type change — e.g. OpenVPN → WireGuard — re-creates the connection
+under the same name), records the source file in the connection's `user`
+setting (shown as a ✓), and restarts the tunnel. The applet itself stays
+stock apart from the Tor button.
 
 The NixOS module supplies the matching system side: `services.tor` with the
 SOCKS client, the control socket, the `lyrebird` pluggable transport preloaded

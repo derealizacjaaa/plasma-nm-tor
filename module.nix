@@ -96,17 +96,14 @@ in
         type = lib.types.bool;
         default = false;
         description = ''
-          Also patch in on-the-fly VPN configuration swapping: expanding a
-          VPN/WireGuard connection in the applet lists the configuration
-          files (`.ovpn`, `.conf`, `.wg`, `.pcf`) found in
-          `~/.config/plasma-nm-vpn-configs` and `/etc/plasma-nm/vpn-configs`;
-          clicking one imports it through NetworkManager's VPN plugins,
-          overwrites the connection's settings in place (name and UUID are
-          kept) and reconnects the tunnel.
-
-          Note: the swap list lives in the connection-list entry, which
-          `vpnButton.enable` hides — with both enabled the swap UI is
-          unreachable.
+          Also patch in on-the-fly VPN configuration swapping as a dedicated
+          "VPN" page in System Settings (next to Wi-Fi & Networking and
+          Proxy). The page lists the configuration files (`.ovpn`, `.conf`,
+          `.wg`, `.pcf`) found in `~/.config/plasma-nm-vpn-configs` and
+          `/etc/plasma-nm/vpn-configs`; clicking one imports it through
+          NetworkManager's VPN plugins, overwrites the chosen connection's
+          settings in place (name, UUID and DNS priority are kept) and
+          reconnects the tunnel. Composes fine with `vpnButton.enable`.
         '';
       };
 
@@ -159,12 +156,6 @@ in
         vpnConfigSwap = cfg.vpnConfigSwap.enable;
       })
     ];
-
-    warnings = lib.optional (cfg.vpnButton.enable && cfg.vpnConfigSwap.enable) ''
-      services.plasma-nm-tor: vpnButton.enable hides VPN connections from the
-      applet's connection list, which is where vpnConfigSwap's file list is
-      shown — with both enabled the config swap UI is unreachable.
-    '';
 
     environment.etc."plasma-nm/vpn-configs" = lib.mkIf (cfg.vpnConfigSwap.directory != null) {
       source = cfg.vpnConfigSwap.directory;

@@ -1,111 +1,195 @@
-diff -ruN a/applet/ConnectionItem.qml b/applet/ConnectionItem.qml
---- a/applet/ConnectionItem.qml	2026-07-19 19:45:26.654787905 +0200
-+++ b/applet/ConnectionItem.qml	2026-07-19 20:55:09.062887555 +0200
-@@ -37,6 +37,11 @@
-     property real rxSpeed: 0
-     property real txSpeed: 0
- 
-+    // On-the-fly VPN config swap: saved VPN/WireGuard connections can have a
-+    // config file from the watched directories applied in place
-+    property bool configSwappable: model.Uuid !== "" && vpnConfigs.isSwappable(model.Type)
-+    property string appliedConfig: ""
+diff -ruN a/kcms/CMakeLists.txt b/kcms/CMakeLists.txt
+--- a/kcms/CMakeLists.txt	2026-07-19 19:45:26.654912493 +0200
++++ b/kcms/CMakeLists.txt	2026-07-20 03:49:11.886444616 +0200
+@@ -6,3 +6,4 @@
+ add_subdirectory(kcm_wifi_mobile)
+ add_subdirectory(kcm_wired_mobile)
+ add_subdirectory(kcm_connections)
++add_subdirectory(kcm_vpnconfigs)
+diff -ruN a/kcms/kcm_vpnconfigs/CMakeLists.txt b/kcms/kcm_vpnconfigs/CMakeLists.txt
+--- a/kcms/kcm_vpnconfigs/CMakeLists.txt	1970-01-01 01:00:00.000000000 +0100
++++ b/kcms/kcm_vpnconfigs/CMakeLists.txt	2026-07-20 03:48:51.280667371 +0200
+@@ -0,0 +1,13 @@
++# SPDX-FileCopyrightText: 2026 derealizacja
++# SPDX-License-Identifier: BSD-2-Clause
 +
-     property alias passwordDialogComponent: passwordDialogComponent
- 
-     icon: model.ConnectionIcon
-@@ -206,6 +211,53 @@
-                 }
-             }
- 
-+            Column {
-+                anchors {
-+                    left: parent.left
-+                    right: parent.right
++add_definitions(-DTRANSLATION_DOMAIN=\"plasmanetworkmanagement-kcm-vpnconfigs\")
++
++kcmutils_add_qml_kcm(kcm_vpnconfigs SOURCES vpnconfigskcm.cpp)
++target_link_libraries(kcm_vpnconfigs PRIVATE
++    Qt::Quick
++    Qt::Qml
++    KF6::I18n
++    KF6::CoreAddons
++    KF6::KCMUtilsQuick
++)
+diff -ruN a/kcms/kcm_vpnconfigs/kcm_vpnconfigs.json b/kcms/kcm_vpnconfigs/kcm_vpnconfigs.json
+--- a/kcms/kcm_vpnconfigs/kcm_vpnconfigs.json	1970-01-01 01:00:00.000000000 +0100
++++ b/kcms/kcm_vpnconfigs/kcm_vpnconfigs.json	2026-07-20 03:48:48.331701319 +0200
+@@ -0,0 +1,13 @@
++{
++    "KPlugin": {
++        "Description": "Swap VPN configuration files on the fly",
++        "Description[pl]": "Podmieniaj pliki konfiguracyjne VPN w locie",
++        "Icon": "network-vpn",
++        "Name": "VPN",
++        "Name[pl]": "VPN"
++    },
++    "X-KDE-Keywords": "vpn,wireguard,openvpn,mullvad,configuration,config,swap,server,tunnel",
++    "X-KDE-Keywords[pl]": "vpn,wireguard,openvpn,mullvad,konfiguracja,config,podmiana,serwer,tunel",
++    "X-KDE-System-Settings-Parent-Category": "networksettings",
++    "X-KDE-Weight": 20
++}
+diff -ruN a/kcms/kcm_vpnconfigs/ui/main.qml b/kcms/kcm_vpnconfigs/ui/main.qml
+--- a/kcms/kcm_vpnconfigs/ui/main.qml	1970-01-01 01:00:00.000000000 +0100
++++ b/kcms/kcm_vpnconfigs/ui/main.qml	2026-07-20 03:49:06.078504958 +0200
+@@ -0,0 +1,114 @@
++/*
++    SPDX-FileCopyrightText: 2026 derealizacja
++
++    SPDX-License-Identifier: LGPL-2.1-only OR LGPL-3.0-only OR LicenseRef-KDE-Accepted-LGPL
++*/
++
++import QtQuick
++import QtQuick.Layouts
++
++import org.kde.kirigami as Kirigami
++import org.kde.kcmutils
++import org.kde.kirigamiaddons.formcard as FormCard
++import org.kde.plasma.networkmanagement as PlasmaNM
++
++SimpleKCM {
++    id: root
++
++    leftPadding: 0
++    rightPadding: 0
++    topPadding: Kirigami.Units.gridUnit
++    bottomPadding: Kirigami.Units.gridUnit
++
++    data: [
++        PlasmaNM.VpnConfigs {
++            id: vpnConfigs
++        },
++
++        Connections {
++            target: vpnConfigs
++
++            function onApplyFailed(message) {
++                errorMessage.text = message;
++                errorMessage.visible = true;
++            }
++
++            function onApplied(uuid) {
++                errorMessage.visible = false;
++            }
++        }
++    ]
++
++    header: Kirigami.InlineMessage {
++        id: errorMessage
++
++        type: Kirigami.MessageType.Error
++        position: Kirigami.InlineMessage.Position.Header
++        showCloseButton: true
++        visible: false
++    }
++
++    Component.onCompleted: vpnConfigs.refresh()
++
++    ColumnLayout {
++        spacing: 0
++
++        Kirigami.PlaceholderMessage {
++            Layout.fillWidth: true
++            Layout.topMargin: Kirigami.Units.gridUnit * 4
++            visible: vpnConfigs.connections.length === 0
++            icon.name: "network-vpn"
++            text: i18n("No VPN connections")
++            explanation: i18n("Add or import a VPN connection in Wi-Fi & Networking first — this page swaps configuration files into existing connections.")
++        }
++
++        FormCard.FormCard {
++            visible: vpnConfigs.connections.length > 0 && vpnConfigs.configs.length === 0
++
++            FormCard.FormTextDelegate {
++                text: i18n("No configuration files found")
++                description: i18n("Put .ovpn, .conf, .wg or .pcf files into ~/.config/plasma-nm-vpn-configs or /etc/plasma-nm/vpn-configs and they will show up here.")
++            }
++        }
++
++        Repeater {
++            model: vpnConfigs.configs.length > 0 ? vpnConfigs.connections : []
++
++            delegate: ColumnLayout {
++                id: connectionSection
++
++                required property var modelData
++
++                Layout.fillWidth: true
++                spacing: 0
++
++                FormCard.FormHeader {
++                    title: connectionSection.modelData.active
++                        ? i18nc("%1 is a VPN connection name", "%1 — connected", connectionSection.modelData.name)
++                        : connectionSection.modelData.name
 +                }
-+                visible: connectionItem.configSwappable && configRepeater.count > 0 && detailsTabBar.currentIndex === 1
 +
-+                Kirigami.Separator {
-+                    anchors {
-+                        left: parent.left
-+                        right: parent.right
-+                    }
-+                }
++                FormCard.FormCard {
++                    Repeater {
++                        model: vpnConfigs.configs
 +
-+                PlasmaComponents3.Label {
-+                    text: i18n("Swap configuration")
-+                    font: Kirigami.Theme.smallFont
-+                    opacity: 0.7
-+                    leftPadding: Kirigami.Units.smallSpacing
-+                    topPadding: Kirigami.Units.smallSpacing
-+                }
++                        delegate: FormCard.FormButtonDelegate {
++                            id: fileDelegate
 +
-+                Repeater {
-+                    id: configRepeater
-+                    model: vpnConfigs.configs
++                            required property var modelData
 +
-+                    delegate: PlasmaComponents3.ItemDelegate {
-+                        id: configDelegate
++                            readonly property bool isCurrent: modelData.path === connectionSection.modelData.currentConfig
 +
-+                        required property var modelData
++                            text: modelData.name
++                            description: modelData.path
++                            icon.name: isCurrent ? "checkmark" : "document-replace"
++                            enabled: !vpnConfigs.busy
 +
-+                        readonly property bool isCurrent: modelData.path === connectionItem.appliedConfig
-+
-+                        width: parent.width
-+                        text: modelData.name
-+                        icon.name: isCurrent ? "checkmark" : "document-replace"
-+                        enabled: !vpnConfigs.busy
-+
-+                        PlasmaComponents3.ToolTip.text: configDelegate.modelData.path
-+                        PlasmaComponents3.ToolTip.visible: hovered
-+                        PlasmaComponents3.ToolTip.delay: Kirigami.Units.toolTipDelay
-+
-+                        onClicked: vpnConfigs.apply(modelData.path, connectionItem.model.Uuid)
++                            onClicked: vpnConfigs.apply(fileDelegate.modelData.path, connectionSection.modelData.uuid)
++                        }
 +                    }
 +                }
 +            }
-+
-         }
-     }
- 
-@@ -320,6 +372,24 @@
-         }
-     }
- 
-+    Connections {
-+        target: vpnConfigs
-+        enabled: connectionItem.configSwappable
-+
-+        function onApplied(uuid) {
-+            if (uuid === connectionItem.model.Uuid) {
-+                connectionItem.appliedConfig = vpnConfigs.currentConfig(uuid);
-+            }
 +        }
 +    }
++}
+diff -ruN a/kcms/kcm_vpnconfigs/vpnconfigskcm.cpp b/kcms/kcm_vpnconfigs/vpnconfigskcm.cpp
+--- a/kcms/kcm_vpnconfigs/vpnconfigskcm.cpp	1970-01-01 01:00:00.000000000 +0100
++++ b/kcms/kcm_vpnconfigs/vpnconfigskcm.cpp	2026-07-20 03:48:44.986740490 +0200
+@@ -0,0 +1,28 @@
++/*
++    SPDX-FileCopyrightText: 2026 derealizacja
 +
-+    onItemExpanded: {
-+        if (configSwappable) {
-+            vpnConfigs.refresh();
-+            appliedConfig = vpnConfigs.currentConfig(model.Uuid);
-+        }
++    SPDX-License-Identifier: LGPL-2.1-only OR LGPL-3.0-only OR LicenseRef-KDE-Accepted-LGPL
++*/
++
++#include <KPluginFactory>
++#include <KQuickConfigModule>
++
++/**
++ * System Settings page for on-the-fly VPN config swapping. All the logic
++ * lives in VpnConfigs (org.kde.plasma.networkmanagement); this module just
++ * hosts the QML UI in the Wi-Fi & Networking sidebar category.
++ */
++class VpnConfigsKcm : public KQuickConfigModule
++{
++    Q_OBJECT
++public:
++    VpnConfigsKcm(QObject *parent, const KPluginMetaData &metaData)
++        : KQuickConfigModule(parent, metaData)
++    {
++        setButtons({});
 +    }
++};
 +
-     onItemCollapsed: {
-         connectionItem.customExpandedViewContent = detailsComponent;
-         setDelayModelUpdates(false);
-diff -ruN a/applet/main.qml b/applet/main.qml
---- a/applet/main.qml	2026-07-19 19:45:26.685938651 +0200
-+++ b/applet/main.qml	2026-07-19 19:51:43.067158019 +0200
-@@ -187,6 +187,10 @@
-         id: torStatus
-     }
- 
-+    PlasmaNM.VpnConfigs {
-+        id: vpnConfigs
-+    }
++K_PLUGIN_CLASS_WITH_JSON(VpnConfigsKcm, "kcm_vpnconfigs.json")
 +
-     PlasmaNM.ConnectionIcon {
-         id: connectionIconProvider
-         connectivity: networkStatus.connectivity
++#include "vpnconfigskcm.moc"
 diff -ruN a/libs/CMakeLists.txt b/libs/CMakeLists.txt
 --- a/libs/CMakeLists.txt	2026-07-19 19:45:26.686075253 +0200
 +++ b/libs/CMakeLists.txt	2026-07-19 19:51:21.643306468 +0200
@@ -127,8 +211,8 @@ diff -ruN a/libs/CMakeLists.txt b/libs/CMakeLists.txt
  )
 diff -ruN a/libs/vpnconfigs.cpp b/libs/vpnconfigs.cpp
 --- a/libs/vpnconfigs.cpp	1970-01-01 01:00:00.000000000 +0100
-+++ b/libs/vpnconfigs.cpp	2026-07-19 21:48:40.732527500 +0200
-@@ -0,0 +1,424 @@
++++ b/libs/vpnconfigs.cpp	2026-07-20 03:48:37.685828576 +0200
+@@ -0,0 +1,461 @@
 +/*
 +    SPDX-FileCopyrightText: 2026 derealizacja
 +
@@ -144,14 +228,17 @@ diff -ruN a/libs/vpnconfigs.cpp b/libs/vpnconfigs.cpp
 +#include <QStandardPaths>
 +#include <QTimer>
 +
++#include <algorithm>
 +#include <utility>
 +
 +#include <KLocalizedString>
 +#include <KNotification>
 +
 +#include <NetworkManagerQt/ActiveConnection>
++#include <NetworkManagerQt/Connection>
 +#include <NetworkManagerQt/ConnectionSettings>
 +#include <NetworkManagerQt/Manager>
++#include <NetworkManagerQt/Settings>
 +
 +#include <NetworkManager.h>
 +
@@ -193,6 +280,9 @@ diff -ruN a/libs/vpnconfigs.cpp b/libs/vpnconfigs.cpp
 +    , m_dirs(configDirs())
 +{
 +    connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, &VpnConfigs::scan);
++    connect(NetworkManager::settingsNotifier(), &NetworkManager::SettingsNotifier::connectionAdded, this, &VpnConfigs::connectionsChanged);
++    connect(NetworkManager::settingsNotifier(), &NetworkManager::SettingsNotifier::connectionRemoved, this, &VpnConfigs::connectionsChanged);
++    connect(NetworkManager::notifier(), &NetworkManager::Notifier::activeConnectionsChanged, this, &VpnConfigs::connectionsChanged);
 +    refresh();
 +}
 +
@@ -248,6 +338,36 @@ diff -ruN a/libs/vpnconfigs.cpp b/libs/vpnconfigs.cpp
 +        m_configs = found;
 +        Q_EMIT configsChanged();
 +    }
++}
++
++QVariantList VpnConfigs::connections()
++{
++    QVariantList result;
++    const auto activeConnections = NetworkManager::activeConnections();
++    const auto connections = NetworkManager::listConnections();
++    for (const NetworkManager::Connection::Ptr &connection : connections) {
++        const auto type = connection->settings()->connectionType();
++        if (type != NetworkManager::ConnectionSettings::Vpn && type != NetworkManager::ConnectionSettings::WireGuard) {
++            continue;
++        }
++        bool active = false;
++        for (const NetworkManager::ActiveConnection::Ptr &activeConnection : activeConnections) {
++            if (activeConnection->uuid() == connection->uuid()) {
++                active = true;
++                break;
++            }
++        }
++        result.append(QVariantMap{
++            {QStringLiteral("name"), connection->name()},
++            {QStringLiteral("uuid"), connection->uuid()},
++            {QStringLiteral("active"), active},
++            {QStringLiteral("currentConfig"), currentConfig(connection->uuid())},
++        });
++    }
++    std::sort(result.begin(), result.end(), [](const QVariant &a, const QVariant &b) {
++        return a.toMap()[QStringLiteral("name")].toString().localeAwareCompare(b.toMap()[QStringLiteral("name")].toString()) < 0;
++    });
++    return result;
 +}
 +
 +bool VpnConfigs::isSwappable(int type) const
@@ -541,6 +661,7 @@ diff -ruN a/libs/vpnconfigs.cpp b/libs/vpnconfigs.cpp
 +    }
 +
 +    Q_EMIT applied(uuid);
++    Q_EMIT connectionsChanged();
 +
 +    // give NM a moment to tear the old tunnel down before bringing up the new one
 +    QPointer<VpnConfigs> guard(this);
@@ -555,8 +676,8 @@ diff -ruN a/libs/vpnconfigs.cpp b/libs/vpnconfigs.cpp
 +#include "moc_vpnconfigs.cpp"
 diff -ruN a/libs/vpnconfigs.h b/libs/vpnconfigs.h
 --- a/libs/vpnconfigs.h	1970-01-01 01:00:00.000000000 +0100
-+++ b/libs/vpnconfigs.h	2026-07-19 21:48:47.140438842 +0200
-@@ -0,0 +1,86 @@
++++ b/libs/vpnconfigs.h	2026-07-20 03:48:12.839157353 +0200
+@@ -0,0 +1,90 @@
 +/*
 +    SPDX-FileCopyrightText: 2026 derealizacja
 +
@@ -595,6 +716,8 @@ diff -ruN a/libs/vpnconfigs.h b/libs/vpnconfigs.h
 +
 +    /** list of {name, path} maps, one per discovered configuration file */
 +    Q_PROPERTY(QVariantList configs READ configs NOTIFY configsChanged)
++    /** saved VPN/WireGuard connections: {name, uuid, active, currentConfig} */
++    Q_PROPERTY(QVariantList connections READ connections NOTIFY connectionsChanged)
 +    /** an apply() is in flight */
 +    Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
 +
@@ -603,6 +726,7 @@ diff -ruN a/libs/vpnconfigs.h b/libs/vpnconfigs.h
 +    ~VpnConfigs() override;
 +
 +    QVariantList configs() const;
++    QVariantList connections();
 +    bool busy() const;
 +
 +    /** rescan the config directories (call when the item expands) */
@@ -616,6 +740,7 @@ diff -ruN a/libs/vpnconfigs.h b/libs/vpnconfigs.h
 +
 +Q_SIGNALS:
 +    void configsChanged();
++    void connectionsChanged();
 +    void busyChanged();
 +    /** the swap finished and the connection (possibly re-created) is activating */
 +    void applied(const QString &uuid);
