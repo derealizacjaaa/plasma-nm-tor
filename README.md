@@ -16,6 +16,9 @@ A **Tor toggle button in the KDE Plasma network applet** — next to the
   can see at a glance that Tor is up.
 - The button only appears when the module is enabled — the applet is unchanged
   otherwise.
+- **Opt-in extras**: a VPN toggle button in the applet header, and a "VPN"
+  System Settings page that swaps `.ovpn`/WireGuard config files into an
+  existing connection with one click (see the options below).
 
 What you get is a **SOCKS proxy at `127.0.0.1:9050`** (like Tor Browser uses).
 It does *not* transparently route the whole system through Tor.
@@ -106,8 +109,11 @@ comes from the binary cache).
 ## Compatibility
 
 Developed and tested against **plasma-nm 6.6.6** on NixOS 26.05 with Plasma 6.
-The patch touches `applet/main.qml`, `libs/CMakeLists.txt` and adds two files;
-if a nixpkgs bump breaks it, rebasing is usually mechanical.
+The Tor patch touches `applet/main.qml` and `libs/CMakeLists.txt` and adds the
+`TorStatus` class; the VPN button patch touches the applet and
+`libs/networkstatus.*`; the config swap patch adds the `VpnConfigs` class and
+the `kcm_vpnconfigs` System Settings module. If a nixpkgs bump breaks them,
+rebasing is usually mechanical.
 
 ## License
 

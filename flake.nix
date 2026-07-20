@@ -1,5 +1,5 @@
 {
-  description = "Tor toggle button in the KDE Plasma network applet — one-click Tor with live bootstrap progress and automatic obfs4 bridges fallback";
+  description = "Tor toggle button in the KDE Plasma network applet — one-click Tor with live bootstrap progress and obfs4 fallback; opt-in: VPN header button and a System Settings page for on-the-fly VPN config swapping";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";

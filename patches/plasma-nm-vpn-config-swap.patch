@@ -211,8 +211,8 @@ diff -ruN a/libs/CMakeLists.txt b/libs/CMakeLists.txt
  )
 diff -ruN a/libs/vpnconfigs.cpp b/libs/vpnconfigs.cpp
 --- a/libs/vpnconfigs.cpp	1970-01-01 01:00:00.000000000 +0100
-+++ b/libs/vpnconfigs.cpp	2026-07-20 03:48:37.685828576 +0200
-@@ -0,0 +1,461 @@
++++ b/libs/vpnconfigs.cpp	2026-07-20 04:43:00.338640897 +0200
+@@ -0,0 +1,456 @@
 +/*
 +    SPDX-FileCopyrightText: 2026 derealizacja
 +
@@ -368,11 +368,6 @@ diff -ruN a/libs/vpnconfigs.cpp b/libs/vpnconfigs.cpp
 +        return a.toMap()[QStringLiteral("name")].toString().localeAwareCompare(b.toMap()[QStringLiteral("name")].toString()) < 0;
 +    });
 +    return result;
-+}
-+
-+bool VpnConfigs::isSwappable(int type) const
-+{
-+    return type == NetworkManager::ConnectionSettings::Vpn || type == NetworkManager::ConnectionSettings::WireGuard;
 +}
 +
 +void VpnConfigs::setBusy(bool busy)
@@ -676,8 +671,8 @@ diff -ruN a/libs/vpnconfigs.cpp b/libs/vpnconfigs.cpp
 +#include "moc_vpnconfigs.cpp"
 diff -ruN a/libs/vpnconfigs.h b/libs/vpnconfigs.h
 --- a/libs/vpnconfigs.h	1970-01-01 01:00:00.000000000 +0100
-+++ b/libs/vpnconfigs.h	2026-07-20 03:48:12.839157353 +0200
-@@ -0,0 +1,90 @@
++++ b/libs/vpnconfigs.h	2026-07-20 04:43:07.785608917 +0200
+@@ -0,0 +1,88 @@
 +/*
 +    SPDX-FileCopyrightText: 2026 derealizacja
 +
@@ -695,12 +690,12 @@ diff -ruN a/libs/vpnconfigs.h b/libs/vpnconfigs.h
 +
 +typedef struct _NMClient NMClient;
 +typedef struct _NMConnection NMConnection;
-+typedef struct _NMRemoteConnection NMRemoteConnection;
 +typedef struct _GObject GObject;
 +typedef struct _GAsyncResult GAsyncResult;
 +
 +/**
-+ * On-the-fly VPN configuration swapping for the applet.
++ * On-the-fly VPN configuration swapping — backend of the "VPN" System
++ * Settings page (kcm_vpnconfigs).
 + *
 + * Watches ~/.config/plasma-nm-vpn-configs and /etc/plasma-nm/vpn-configs for
 + * VPN configuration files (.ovpn, .conf, .wg, .pcf). apply() imports the
@@ -729,12 +724,8 @@ diff -ruN a/libs/vpnconfigs.h b/libs/vpnconfigs.h
 +    QVariantList connections();
 +    bool busy() const;
 +
-+    /** rescan the config directories (call when the item expands) */
++    /** rescan the config directories (call when the page opens) */
 +    Q_INVOKABLE void refresh();
-+    /** whether a connection of this NM type can have its config swapped */
-+    Q_INVOKABLE bool isSwappable(int type) const;
-+    /** path of the config file last applied to the connection, if recorded */
-+    Q_INVOKABLE QString currentConfig(const QString &uuid);
 +    /** import filePath and swap it into the connection identified by uuid */
 +    Q_INVOKABLE void apply(const QString &filePath, const QString &uuid);
 +
@@ -749,6 +740,8 @@ diff -ruN a/libs/vpnconfigs.h b/libs/vpnconfigs.h
 +private:
 +    void scan();
 +    void setBusy(bool busy);
++    /** path of the config file last applied to the connection, if recorded */
++    QString currentConfig(const QString &uuid);
 +    NMClient *client();
 +    NMConnection *importFile(const QString &filePath, QString &errorOut) const;
 +    void finishApply(const QString &uuid, const QString &connectionPath, bool wasActive);
